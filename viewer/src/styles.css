@@ -1,0 +1,415 @@
+:root {
+  color-scheme: light;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  background: #eef2f6;
+  color: #1c2836;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+button,
+select,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+.app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #d5dee8;
+  background: #f7f9fb;
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;
+  min-width: 88px;
+  line-height: 1.1;
+}
+
+.brand span,
+label,
+.eyebrow,
+.cycle-readout span,
+.motor span,
+.legend {
+  color: #5c6d80;
+  font-size: 12px;
+}
+
+label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+select,
+button {
+  background: #ffffff;
+  border: 1px solid #c5d0dc;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.scrubber {
+  flex: 1;
+  min-width: 80px;
+  accent-color: #f0b429;
+}
+
+.error {
+  margin: 0;
+  color: #b42318;
+  font-size: 13px;
+}
+
+.stage {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) 460px;
+}
+
+.world {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+.tools {
+  position: absolute;
+  z-index: 2;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  gap: 6px;
+}
+
+.tools button.active,
+.poses button.active {
+  border-color: #f0b429;
+  color: #f0b429;
+}
+
+.poses {
+  position: absolute;
+  z-index: 2;
+  top: 52px;
+  left: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: min(640px, calc(100% - 24px));
+}
+
+.inspect {
+  min-height: 18px;
+  margin: 6px 0 0;
+  color: #1c2836;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+
+.world canvas {
+  display: block;
+}
+
+.chip {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 14px 18px;
+  border-left: 1px solid #d5dee8;
+  background: #f7f9fb;
+}
+
+.chip-stage {
+  flex: 1;
+  min-height: 260px;
+  margin-top: 8px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #e7eef5;
+}
+
+.chip-stage canvas {
+  display: block;
+}
+
+.chip-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.chip-head h2,
+.eyebrow {
+  margin: 0;
+}
+
+.chip-head h2 {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.clock-led {
+  width: 12px;
+  height: 22px;
+  border-radius: 2px;
+  background: #f0b429;
+  box-shadow: 0 0 12px #f0b429;
+  transform-origin: center bottom;
+  animation: clock-edge 100ms steps(2, end);
+}
+
+@keyframes clock-edge {
+  from {
+    transform: scaleY(0.2);
+    opacity: 0.35;
+  }
+  to {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+.clock-wave {
+  display: block;
+  width: 100%;
+  height: 44px;
+  margin: 8px 0 4px;
+}
+
+.cycle-readout {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.cycle-readout strong {
+  display: block;
+  margin-top: 2px;
+  color: #9a6b12;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.structures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 10px;
+}
+
+.structures button {
+  padding: 3px 7px;
+  font-size: 12px;
+}
+
+.structures button.active {
+  background: #d7e8f8;
+  border-color: #3d7ea6;
+  color: #1c4e73;
+}
+
+.structure-note {
+  margin: 8px 0 0;
+  color: #1c2836;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.structure-note strong {
+  display: block;
+  margin-bottom: 2px;
+  color: #1c4e73;
+  font-size: 12px;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  margin: 12px 0 8px;
+}
+
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.die-controls {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.chip-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  border: 0;
+  padding: 0;
+  background: rgba(28, 40, 54, 0.35);
+}
+
+.chip-modal {
+  position: fixed;
+  z-index: 21;
+  inset: 20px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto auto auto;
+  column-gap: 16px;
+  overflow: hidden;
+  border: 1px solid #d5dee8;
+  border-radius: 12px;
+  box-shadow: 0 18px 50px rgba(28, 40, 54, 0.18);
+}
+
+.chip-modal .chip-stage {
+  grid-column: 1;
+  grid-row: 1 / -1;
+  margin: 0;
+  min-height: 0;
+}
+
+.chip-modal .chip-head,
+.chip-modal .clock-wave,
+.chip-modal .cycle-readout,
+.chip-modal .inspect,
+.chip-modal .structures,
+.chip-modal .structure-note,
+.chip-modal .legend,
+.chip-modal .die-controls,
+.chip-modal .chip-transport,
+.chip-modal .motors {
+  grid-column: 2;
+  min-height: 0;
+  overflow: auto;
+}
+
+.chip-transport {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.chip-transport .scrubber {
+  flex: 1;
+}
+
+.chip-transport strong {
+  min-width: 3.2em;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+}
+
+.motor {
+  width: 100%;
+  text-align: left;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.motors {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.motor {
+  display: grid;
+  grid-template-columns: 96px 1fr 36px;
+  align-items: center;
+  gap: 8px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+
+.motor-track {
+  height: 8px;
+  background: #d5dee8;
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.motor-fill {
+  height: 100%;
+  border-radius: inherit;
+}
+
+.motor-value {
+  text-align: right;
+  color: #1c2836;
+}
+
+.empty {
+  margin: 24px;
+  color: #5c6d80;
+}
+
+@media (max-width: 900px) {
+  .toolbar {
+    flex-wrap: wrap;
+  }
+
+  .stage {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(220px, 42vh) minmax(0, 1fr);
+  }
+
+  .chip {
+    display: flex;
+    flex-direction: column;
+    border-left: 0;
+    border-top: 1px solid #d5dee8;
+  }
+
+  .chip-head { order: 1; }
+  .clock-wave { order: 2; }
+  .cycle-readout { order: 3; }
+  .chip-stage { order: 4; min-height: 220px; }
+  .motors { order: 5; margin-top: 10px; }
+  .legend { order: 6; }
+}

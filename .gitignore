@@ -1,0 +1,13 @@
+runs/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+rtl/generated/
+rtl/mem/
+tb/*.vcd
+tb/*.out
+viewer/node_modules/
+viewer/dist/
+wasm/target/
+
