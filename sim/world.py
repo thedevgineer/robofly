@@ -1,22 +1,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import atan2, cos, exp, hypot, pi, sin
+from math import atan2, ceil, copysign, cos, exp, hypot, pi, sin
 
 import numpy as np
 
-from .topology import CONTACT, LOOM, ODOR_LEFT, ODOR_RIGHT, motor_span
+from .topology import CONTACT, LOOM, ODOR_LEFT, ODOR_RIGHT, loom_bin_index, motor_span
 
 BODY = 0.18
-VISION_RANGE = 2.3
-LOOM_RANGE = 7.0
+VISION_RANGE = 1.6
+LOOM_RANGE = 8.0
 PREDATOR_SPEED = 0.06
-PREDATOR_DRAG = 0.88
+PREDATOR_DRAG = 0.75
+CHASE_RANGE = 36.0
 FLY_DRAG = 0.88
 MAX_FLY_SPEED = 0.24
 FLOOR_Z = 0.12
 CEILING_Z = 2.35
-MAX_WALLS = 8
+HALF_Z = CEILING_Z * 0.5
+MAX_WALLS = 64
+SCENT_CELL = 0.5
+SCENT_LENGTH = 40.0
+_DIAG = 1.4142135623730951
 MAX_FOODS = 6
 MAX_THREATS = 4
 MAX_PADS = 4
@@ -63,6 +68,7 @@ class Box:
     max_x: float
     min_y: float
     max_y: float
+    height: float = HALF_Z
 
 
 @dataclass
@@ -77,36 +83,112 @@ class WorldState:
     started_with_food: bool = False
     predator_speed: float = 0.0
     escape_hold: int = 0
+    saccade_cool: int = 0
+    jump_ticks: int = 0
+    escape_moved: bool = False
+    yaw_latch: float = 0.0
+    yaw_latch_age: int = 0
+    climb_bias: float = 0.0
+    landing_hold: int = 0
     tick: int = 0
+    spawn_x: float = 0.0
+    spawn_y: float = 0.0
+    spawn_z: float = 1.0
+    spawn_yaw: float = 0.0
+    spawn_shield: int = 0
+    downed: bool = False
+    rng: int = 1701
+    scent: object = None
 
 
 def _far_pad() -> WorldObject:
     return WorldObject("landing", 40.0, 40.0, 0.15, 0.5)
 
 
+def _maze_blocks() -> list[Box]:
+    """A perfect maze on a 10 by 7 grid of 2 m cells. Walls are full-height hedges."""
+    cells = (
+        (1.75, 2.25, 3.75, 14),
+        (3.75, 4.25, 3.75, 12.25),
+        (5.75, 6.25, 1.75, 4.25),
+        (5.75, 6.25, 5.75, 8.25),
+        (5.75, 6.25, 9.75, 12.25),
+        (7.75, 8.25, 0, 2.25),
+        (7.75, 8.25, 3.75, 6.25),
+        (7.75, 8.25, 7.75, 10.25),
+        (9.75, 10.25, 1.75, 4.25),
+        (9.75, 10.25, 5.75, 8.25),
+        (9.75, 10.25, 9.75, 12.25),
+        (11.75, 12.25, 0, 2.25),
+        (11.75, 12.25, 5.75, 10.25),
+        (13.75, 14.25, 1.75, 8.25),
+        (15.75, 16.25, 1.75, 4.25),
+        (15.75, 16.25, 5.75, 10.25),
+        (17.75, 18.25, 0, 6.25),
+        (17.75, 18.25, 11.75, 14),
+        (0, 6.25, 1.75, 2.25),
+        (13.75, 16.25, 1.75, 2.25),
+        (5.75, 14.25, 3.75, 4.25),
+        (5.75, 8.25, 5.75, 6.25),
+        (9.75, 12.25, 5.75, 6.25),
+        (15.75, 18.25, 5.75, 6.25),
+        (3.75, 6.25, 7.75, 8.25),
+        (7.75, 10.25, 7.75, 8.25),
+        (17.75, 20, 7.75, 8.25),
+        (5.75, 8.25, 9.75, 10.25),
+        (11.75, 18.25, 9.75, 10.25),
+        (5.75, 16.25, 11.75, 12.25),
+    )
+    return [Box("barrier", a, b, c, d, height=CEILING_Z) for a, b, c, d in cells]
+
+
 def make_world(scenario: str = "food") -> WorldState:
     world = WorldState()
     world.landings = [_far_pad()]
     if scenario == "food":
-        world.room = Room(-12.0, 24.0, -12.0, 18.0)
-        world.foods = [WorldObject("food", 2.4, 1.9, 1.0, 0.45)]
+        world.room = Room(0.0, 20.0, 0.0, 14.0)
+        world.pose = Pose(x=1.0, y=1.0, z=1.0, yaw=0.0)
+        world.foods = [WorldObject("food", 13.0, 5.0, 1.0, 0.45)]
+        world.obstacles = _maze_blocks()
     elif scenario == "loom":
-        world.room = Room(-3.45, 3.45, -3.45, 3.45)
+        world.room = Room(-12.0, 12.0, -12.0, 12.0)
         world.pose = Pose(x=0.35, y=0.0, z=1.5, yaw=0.6)
         world.threats = [WorldObject("threat", -0.65, 0.2, 0.42, 0.4)]
         world.predator_speed = PREDATOR_SPEED
     elif scenario == "obstacle":
         world.room = Room(-9.0, 24.0, -9.0, 12.0)
-        world.obstacles = [Box("barrier", 1.55, 2.15, -2.2, 0.45)]
+        world.obstacles = [Box("barrier", 1.55, 2.15, -2.2, 0.45, height=CEILING_Z)]
         world.foods = [WorldObject("food", 4.2, 1.8, 1.0, 0.45)]
     elif scenario == "landing":
         world.room = Room(-12.0, 15.0, -12.0, 12.0)
         world.landings = [WorldObject("landing", 0.15, 0.0, 0.12, 0.7)]
     elif scenario == "silent":
         world.room = Room(-24.0, 24.0, -24.0, 24.0)
+    elif scenario == "yard":
+        world.room = Room(-16.0, 16.0, -14.0, 14.0)
+        world.pose = Pose(x=0.0, y=-2.0, z=1.2, yaw=0.5)
+        world.foods = [
+            WorldObject("food", 8.0, 6.0, 1.0, 0.45),
+            WorldObject("food", -7.0, 5.0, 1.0, 0.45),
+        ]
+        world.threats = [WorldObject("threat", -1.2, -0.4, 0.45, 0.4)]
+        world.predator_speed = PREDATOR_SPEED
+        world.landings.append(WorldObject("landing", 10.0, -8.0, 0.12, 0.7))
+        world.obstacles = [
+            Box("barrier", 4.0, 5.0, -2.0, 4.0),
+            Box("barrier", -6.0, -2.0, 3.0, 4.0),
+            Box("barrier", 2.0, 7.0, 8.0, 9.0),
+            Box("barrier", -10.0, -9.0, -6.0, -1.0),
+            Box("barrier", -4.0, 1.0, -8.0, -7.0),
+            Box("barrier", 9.0, 10.0, 1.0, 6.0),
+        ]
     else:
         raise ValueError(f"unknown scenario {scenario}")
     world.started_with_food = bool(world.foods)
+    world.spawn_x = world.pose.x
+    world.spawn_y = world.pose.y
+    world.spawn_z = world.pose.z
+    world.spawn_yaw = world.pose.yaw
     return world
 
 
@@ -127,6 +209,7 @@ def _dump_box(box: Box) -> dict:
         "y": (box.min_y + box.max_y) / 2,
         "z": 0.7,
         "radius": max(box.max_x - box.min_x, box.max_y - box.min_y) / 2,
+        "height": box.height,
     }
 
 
@@ -210,6 +293,10 @@ def world_from_layout(layout: dict) -> WorldState:
         threats=threats,
         started_with_food=bool(foods),
         predator_speed=PREDATOR_SPEED if threats else 0.0,
+        spawn_x=pose.x,
+        spawn_y=pose.y,
+        spawn_z=pose.z,
+        spawn_yaw=pose.yaw,
     )
 
 
@@ -218,7 +305,14 @@ def _object_from_dump(item: dict, kind: str) -> WorldObject:
 
 
 def _box_from_dump(item: dict) -> Box:
-    return Box("barrier", float(item["min_x"]), float(item["max_x"]), float(item["min_y"]), float(item["max_y"]))
+    return Box(
+        "barrier",
+        float(item["min_x"]),
+        float(item["max_x"]),
+        float(item["min_y"]),
+        float(item["max_y"]),
+        height=float(item.get("height", HALF_Z)),
+    )
 
 
 def _nearest_volume(items: list[WorldObject], pose: Pose) -> tuple[WorldObject | None, float]:
@@ -250,6 +344,7 @@ def frame_actors(world: WorldState) -> dict:
     nearest_threat, _threat_dist = _nearest_volume(world.threats, world.pose)
     return {
         "eaten": world.eaten,
+        "downed": world.downed,
         "inside_room": inside_room(world),
         "food": _dump_object(nearest_food),
         "foods": foods,
@@ -382,7 +477,7 @@ def _contain(
 
 
 def advance_predator(world: WorldState) -> None:
-    if world.predator_speed <= 0:
+    if world.downed or world.predator_speed <= 0:
         return
     pose = world.pose
     for threat in world.threats:
@@ -390,7 +485,12 @@ def advance_predator(world: WorldState) -> None:
         dy = pose.y - threat.y
         dz = pose.z - threat.z
         dist = _speed_of(dx, dy, dz)
-        closing = 0.0 if dist <= 0.28 else min(1.0, (dist - 0.28) / 0.35)
+        if dist <= 0.45:
+            closing = 0.0
+        elif dist <= CHASE_RANGE:
+            closing = 1.0
+        else:
+            closing = 0.35
         if dist > 1e-8 and closing > 0.0:
             accel = world.predator_speed * (1.0 - PREDATOR_DRAG) * closing
             threat.vx = threat.vx * PREDATOR_DRAG + (dx / dist) * accel
@@ -409,14 +509,133 @@ def advance_predator(world: WorldState) -> None:
         )
 
 
+def _scent_targets(world: WorldState) -> list[WorldObject]:
+    return world.foods if world.foods else _pads_inside(world)
+
+
+def _scent_field(world: WorldState) -> dict:
+    targets = _scent_targets(world)
+    room = world.room
+    key = (
+        room.min_x,
+        room.max_x,
+        room.min_y,
+        room.max_y,
+        tuple((t.x, t.y) for t in targets),
+        tuple((b.min_x, b.max_x, b.min_y, b.max_y) for b in world.obstacles),
+    )
+    cached = world.scent
+    if cached is not None and cached["key"] == key:
+        return cached
+    cols = max(1, int(ceil((room.max_x - room.min_x) / SCENT_CELL)))
+    rows = max(1, int(ceil((room.max_y - room.min_y) / SCENT_CELL)))
+    blocked = [False] * (cols * rows)
+    for iy in range(rows):
+        cy = room.min_y + (iy + 0.5) * SCENT_CELL
+        for ix in range(cols):
+            cx = room.min_x + (ix + 0.5) * SCENT_CELL
+            for box in world.obstacles:
+                if box.min_x - BODY < cx < box.max_x + BODY and box.min_y - BODY < cy < box.max_y + BODY:
+                    blocked[iy * cols + ix] = True
+                    break
+    inf = 1e18
+    dist = [inf] * (cols * rows)
+    for target in targets:
+        ix = min(cols - 1, max(0, int((target.x - room.min_x) / SCENT_CELL)))
+        iy = min(rows - 1, max(0, int((target.y - room.min_y) / SCENT_CELL)))
+        blocked[iy * cols + ix] = False
+        dist[iy * cols + ix] = 0.0
+    forward = ((-1, -1, _DIAG), (0, -1, 1.0), (1, -1, _DIAG), (-1, 0, 1.0))
+    backward = ((1, 1, _DIAG), (0, 1, 1.0), (-1, 1, _DIAG), (1, 0, 1.0))
+
+    def relax(ix: int, iy: int, steps: tuple) -> bool:
+        here = iy * cols + ix
+        if blocked[here]:
+            return False
+        changed = False
+        for dx, dy, cost in steps:
+            nx = ix + dx
+            ny = iy + dy
+            if nx < 0 or ny < 0 or nx >= cols or ny >= rows:
+                continue
+            there = ny * cols + nx
+            if blocked[there]:
+                continue
+            if dx and dy and (blocked[iy * cols + nx] or blocked[ny * cols + ix]):
+                continue
+            candidate = dist[there] + cost
+            if candidate < dist[here]:
+                dist[here] = candidate
+                changed = True
+        return changed
+
+    if targets:
+        for _ in range(200):
+            changed = False
+            for iy in range(rows):
+                for ix in range(cols):
+                    changed |= relax(ix, iy, forward)
+            for iy in range(rows - 1, -1, -1):
+                for ix in range(cols - 1, -1, -1):
+                    changed |= relax(ix, iy, backward)
+            if not changed:
+                break
+    field = {"key": key, "cols": cols, "rows": rows, "blocked": blocked, "dist": dist}
+    world.scent = field
+    return field
+
+
+def _scent_direction(world: WorldState, pose: Pose) -> tuple[float, float] | None:
+    """Downhill heading and path length (meters) from the fly to the nearest target."""
+    field = _scent_field(world)
+    room = world.room
+    cols = field["cols"]
+    rows = field["rows"]
+    dist = field["dist"]
+    blocked = field["blocked"]
+    ix = min(cols - 1, max(0, int((pose.x - room.min_x) / SCENT_CELL)))
+    iy = min(rows - 1, max(0, int((pose.y - room.min_y) / SCENT_CELL)))
+    here = dist[iy * cols + ix]
+    if here >= 1e17 or blocked[iy * cols + ix]:
+        return None
+    gx = 0.0
+    gy = 0.0
+    for dx, dy, length in (
+        (-1, -1, _DIAG), (0, -1, 1.0), (1, -1, _DIAG), (-1, 0, 1.0),
+        (1, 0, 1.0), (-1, 1, _DIAG), (0, 1, 1.0), (1, 1, _DIAG),
+    ):
+        nx = ix + dx
+        ny = iy + dy
+        if nx < 0 or ny < 0 or nx >= cols or ny >= rows:
+            continue
+        there = dist[ny * cols + nx]
+        if there >= 1e17 or blocked[ny * cols + nx]:
+            continue
+        if dx and dy and (blocked[iy * cols + nx] or blocked[ny * cols + ix]):
+            continue
+        gain = (here - there) / length
+        gx += gain * dx
+        gy += gain * dy
+    if hypot(gx, gy) < 1e-9:
+        return None
+    return atan2(gy, gx), here * SCENT_CELL
+
+
 def encode_sensors(world: WorldState, n: int) -> np.ndarray:
     drive = np.zeros(n, dtype=np.float32)
     pose = world.pose
-    food, food_dist = _nearest(world.foods, pose)
-    if food is not None:
-        food_dist = max(0.001, food_dist)
-        food_angle = angle_delta(atan2(food.y - pose.y, food.x - pose.x), pose.yaw)
-        odor = exp(-food_dist / 3.2)
+    targets = _scent_targets(world)
+    if targets:
+        found = _scent_direction(world, pose)
+        if found is None:
+            near, near_dist = _nearest(targets, pose)
+            heading = atan2(near.y - pose.y, near.x - pose.x)
+            travel = near_dist
+        else:
+            heading, travel = found
+        food_dist = max(0.001, travel)
+        food_angle = angle_delta(heading, pose.yaw)
+        odor = exp(-food_dist / SCENT_LENGTH)
         forward = odor * max(0.0, cos(food_angle))
         left = odor * max(0.0, sin(food_angle))
         right = odor * max(0.0, -sin(food_angle))
@@ -434,7 +653,15 @@ def encode_sensors(world: WorldState, n: int) -> np.ndarray:
 
     _threat, threat_dist = _nearest_volume(world.threats, pose)
     if _threat is not None and threat_dist < LOOM_RANGE:
-        drive[list(LOOM)] = np.float32((LOOM_RANGE - threat_dist) / LOOM_RANGE)
+        strength = (LOOM_RANGE - threat_dist) / LOOM_RANGE
+        bearing = angle_delta(atan2(_threat.y - pose.y, _threat.x - pose.x), pose.yaw)
+        drive[LOOM.start + loom_bin_index(bearing)] = np.float32(strength)
+        horiz = max(1e-8, hypot(_threat.x - pose.x, _threat.y - pose.y))
+        below = strength * max(0.0, -sin(atan2(_threat.z - pose.z, horiz)))
+        if below > 0.0:
+            boosted = np.float32(below * 1.4)
+            for index in motor_span("pitch_up", n):
+                drive[index] = np.float32(max(float(drive[index]), float(boosted)))
 
     rays = 64
     for i in range(rays):
@@ -443,12 +670,14 @@ def encode_sensors(world: WorldState, n: int) -> np.ndarray:
         dy = sin(ray_angle)
         dist = _ray_room_distance(pose.x, pose.y, dx, dy, world.room)
         for box in world.obstacles:
+            if not _occludes(box, pose.z):
+                continue
             hit = _ray_box_distance(pose.x, pose.y, dx, dy, box)
             if hit is not None:
                 dist = min(dist, hit)
         if dist < VISION_RANGE:
             drive[i] = np.float32((VISION_RANGE - dist) / VISION_RANGE)
-    quiet = food is None and nearest_pad is None and (_threat is None or threat_dist >= LOOM_RANGE)
+    quiet = not targets and nearest_pad is None and (_threat is None or threat_dist >= LOOM_RANGE)
     if quiet:
         for index in motor_span("rest"):
             drive[index] = np.float32(1.05)
@@ -491,15 +720,73 @@ def _push_out(pose: Pose, box: Box, margin: float) -> None:
 def resolve_solids(world: WorldState) -> None:
     pose = world.pose
     for box in world.obstacles:
-        _push_out(pose, box, BODY)
+        if _occludes(box, pose.z):
+            _push_out(pose, box, BODY)
     pose.x, pose.y, pose.z, pose.vx, pose.vy, pose.vz = _contain(
         pose.x, pose.y, pose.z, pose.vx, pose.vy, pose.vz, world.room, BODY
     )
     pose.speed = _speed_of(pose.vx, pose.vy, pose.vz)
 
 
+def try_catch(world: WorldState) -> None:
+    """A hunter that reaches the body holds the fly where it fell, until respawn."""
+    if world.spawn_shield > 0:
+        world.spawn_shield -= 1
+        return
+    if world.downed:
+        return
+    pose = world.pose
+    for threat in world.threats:
+        dist = _speed_of(pose.x - threat.x, pose.y - threat.y, pose.z - threat.z)
+        if dist > threat.radius + 0.22:
+            continue
+        pose.vx = 0.0
+        pose.vy = 0.0
+        pose.vz = 0.0
+        pose.yaw_rate = 0.0
+        pose.speed = 0.0
+        world.landing_hold = 0
+        world.downed = True
+        return
+
+
+def respawn(world: WorldState) -> None:
+    """Place the fly on a random landing pad inside the room, or back at the start."""
+    pads = _pads_inside(world)
+    pose = world.pose
+    if pads:
+        world.rng = (world.rng * 1664525 + 1013904223) & 0xFFFFFFFF
+        pad = pads[world.rng % len(pads)]
+        span = float(0xFFFFFF)
+        pose.yaw = ((world.rng >> 8) / span) * 2.0 * pi - pi
+        pose.x = pad.x
+        pose.y = pad.y
+        pose.z = 1.15
+    else:
+        pose.x = world.spawn_x
+        pose.y = world.spawn_y
+        pose.z = world.spawn_z
+        pose.yaw = world.spawn_yaw
+    pose.pitch = 0.0
+    pose.vx = 0.0
+    pose.vy = 0.0
+    pose.vz = 0.0
+    pose.yaw_rate = 0.0
+    pose.speed = 0.0
+    world.downed = False
+    world.landing_hold = 0
+    world.escape_hold = 0
+    world.saccade_cool = 0
+    world.escape_moved = False
+    world.yaw_latch = 0.0
+    world.yaw_latch_age = 0
+    world.climb_bias = 0.0
+    world.jump_ticks = 0
+    world.spawn_shield = 30
+
+
 def try_eat(world: WorldState) -> None:
-    if world.eaten or not world.foods:
+    if world.downed or world.eaten or not world.foods:
         return
     kept: list[WorldObject] = []
     for food in world.foods:
@@ -511,7 +798,142 @@ def try_eat(world: WorldState) -> None:
         world.eaten = True
 
 
+def _hover_lift(z: float, landing: bool) -> float:
+    """Steady descent onto a pad."""
+    if landing:
+        return 0.0 if z <= FLOOR_Z + 0.05 else -0.045
+    return 0.0
+
+
+def _occludes(box: Box, z: float) -> bool:
+    """A wall blocks the body only while the fly is still below its top."""
+    return z < box.height + 0.2
+
+
+def _half_hedge_ahead(world: WorldState) -> float:
+    """Tallest half hedge close on the nose, when the body has not already cleared it."""
+    pose = world.pose
+    dx = cos(pose.yaw)
+    dy = sin(pose.yaw)
+    top = 0.0
+    for box in world.obstacles:
+        if box.height >= CEILING_Z - 0.3:
+            continue
+        hit = _ray_box_distance(pose.x, pose.y, dx, dy, box)
+        if hit is not None and hit < 1.8 and pose.z < box.height + 0.35:
+            top = max(top, box.height)
+    return top
+
+
+def _altitude_gap(world: WorldState) -> tuple[float, bool]:
+    """Height error from how close the hunter is, plus a climb to clear a half hedge."""
+    pose = world.pose
+    threat, dist = _nearest_volume(world.threats, pose)
+    target = 0.95
+    hunter_below = False
+    if threat is not None and dist < LOOM_RANGE:
+        closeness = 1.0 - dist / LOOM_RANGE
+        target = 0.72 + closeness * 1.25
+        hunter_below = threat.z < pose.z
+    ahead_top = _half_hedge_ahead(world)
+    if ahead_top > 0.0:
+        target = max(target, ahead_top + 0.5)
+    target = min(2.05, max(0.7, target))
+    return target - pose.z, hunter_below
+
+
+def _pitch_toward(pose: Pose, climb_bias: float, land: float, gap: float, hunter_below: bool) -> None:
+    """Nose toward the height the chase and the hedges ask for."""
+    attitude = max(-0.45, min(0.55, gap * 1.6))
+    if hunter_below:
+        attitude += 0.06 * climb_bias
+    attitude = max(-0.45, min(0.55, attitude))
+    pose.pitch = 0.8 * pose.pitch + 0.2 * (attitude - 0.45 * land)
+
+
+def _pitched_lift(vz: float, pitch: float, forward: float, gap: float) -> float:
+    """Close a meter of height in about a second, and hold once the gap is gone."""
+    hold = -0.22 * vz
+    climb = sin(pitch) * max(forward, 0.0) + 0.045 * max(-1.2, min(1.2, gap))
+    return max(-0.04, min(0.05, hold + climb))
+
+
+def _heading_clearance(world: WorldState, angle: float) -> float:
+    pose = world.pose
+    dx = cos(angle)
+    dy = sin(angle)
+    dist = _ray_room_distance(pose.x, pose.y, dx, dy, world.room)
+    for box in world.obstacles:
+        if not _occludes(box, pose.z):
+            continue
+        hit = _ray_box_distance(pose.x, pose.y, dx, dy, box)
+        if hit is not None:
+            dist = min(dist, hit)
+    return dist
+
+
+def _wall_avoid(world: WorldState) -> tuple[float, float, float]:
+    """Yaw away from a wall, the clearance ahead, and which way is open.
+
+    Positive side is a left turn. Side is 0 when nothing is close.
+    """
+    ahead = _heading_clearance(world, world.pose.yaw)
+    if ahead >= 2.6:
+        return 0.0, ahead, 0.0
+    left = _heading_clearance(world, world.pose.yaw + 0.7)
+    right = _heading_clearance(world, world.pose.yaw - 0.7)
+    if left > right + 0.05:
+        side = 1.0
+    elif right > left + 0.05:
+        side = -1.0
+    else:
+        side = 1.0
+    urgency = (2.6 - ahead) / 2.6
+    return copysign(0.22 + 0.75 * urgency, side), ahead, side
+
+
+def _bleed_face(pose: Pose, dist: float, nx: float, ny: float) -> None:
+    """Drop speed that is still closing on a nearby face."""
+    pad = 1.25
+    if dist >= pad:
+        return
+    closing = -(pose.vx * nx + pose.vy * ny)
+    if closing <= 0.0:
+        return
+    keep = max(0.0, dist / pad)
+    pose.vx += closing * (1.0 - keep) * nx
+    pose.vy += closing * (1.0 - keep) * ny
+
+
+def _bleed_walls(world: WorldState) -> None:
+    pose = world.pose
+    room = world.room
+    _bleed_face(pose, pose.x - room.min_x - BODY, 1.0, 0.0)
+    _bleed_face(pose, room.max_x - BODY - pose.x, -1.0, 0.0)
+    _bleed_face(pose, pose.y - room.min_y - BODY, 0.0, 1.0)
+    _bleed_face(pose, room.max_y - BODY - pose.y, 0.0, -1.0)
+    for box in world.obstacles:
+        if not _occludes(box, pose.z):
+            continue
+        min_x = box.min_x - BODY
+        max_x = box.max_x + BODY
+        min_y = box.min_y - BODY
+        max_y = box.max_y + BODY
+        if min_y <= pose.y <= max_y:
+            if pose.x <= min_x:
+                _bleed_face(pose, min_x - pose.x, -1.0, 0.0)
+            elif pose.x >= max_x:
+                _bleed_face(pose, pose.x - max_x, 1.0, 0.0)
+        if min_x <= pose.x <= max_x:
+            if pose.y <= min_y:
+                _bleed_face(pose, min_y - pose.y, 0.0, -1.0)
+            elif pose.y >= max_y:
+                _bleed_face(pose, pose.y - max_y, 0.0, 1.0)
+
+
 def apply_motors(world: WorldState, motor_rates: dict[str, float]) -> dict[str, float | bool]:
+    if world.downed:
+        return {"thrust": 0.0, "yaw": 0.0, "pitch": 0.0, "land": False, "escape": False}
     pose = world.pose
     escape = motor_rates.get("escape", 0.0)
     thrust = motor_rates.get("thrust", 0.0)
@@ -529,7 +951,14 @@ def apply_motors(world: WorldState, motor_rates: dict[str, float]) -> dict[str, 
         world.escape_hold = 6
     elif world.escape_hold > 0:
         world.escape_hold -= 1
+    if land >= 0.5:
+        world.landing_hold = 8
+    elif world.landing_hold > 0:
+        world.landing_hold -= 1
     fleeing = escape >= 0.5 or world.escape_hold > 0
+    if fleeing:
+        world.landing_hold = 0
+    landing = (not fleeing) and (land >= 0.5 or world.landing_hold > 0)
     command = {
         "thrust": float(thrust),
         "yaw": float(yaw_left - yaw_right),
@@ -537,41 +966,99 @@ def apply_motors(world: WorldState, motor_rates: dict[str, float]) -> dict[str, 
         "land": bool(land > 0.2),
         "escape": fleeing,
     }
-    yaw_cmd = 0.16 if fleeing else 0.28 * (yaw_left - yaw_right)
+    steer = yaw_left - yaw_right
+    if abs(steer) >= 0.5:
+        world.yaw_latch = copysign(1.1, steer)
+        world.yaw_latch_age = 0
+    elif world.yaw_latch != 0.0:
+        world.yaw_latch_age += 1
+        if world.yaw_latch_age > 2:
+            world.yaw_latch = 0.0
+    if fleeing:
+        if hypot(pose.vx, pose.vy) > 0.05:
+            world.escape_moved = True
+        if world.saccade_cool > 0:
+            world.saccade_cool -= 1
+            yaw_cmd = 0.06 * steer
+        elif abs(steer) >= 0.5:
+            yaw_cmd = copysign(1.1, steer)
+            world.saccade_cool = 7
+        elif world.yaw_latch != 0.0:
+            yaw_cmd = world.yaw_latch
+            world.yaw_latch = 0.0
+            world.saccade_cool = 7
+        elif world.escape_moved and hypot(pose.vx, pose.vy) < 0.02:
+            threat, _threat_gap = _nearest_volume(world.threats, pose)
+            if threat is None:
+                away = 1.0
+            else:
+                bearing = angle_delta(atan2(threat.y - pose.y, threat.x - pose.x), pose.yaw)
+                signed = -sin(bearing)
+                away = signed if abs(signed) > 0.2 else 1.0
+            yaw_cmd = copysign(1.1, away)
+            world.saccade_cool = 7
+        else:
+            yaw_cmd = 0.06 * steer
+    else:
+        world.saccade_cool = 0
+        world.escape_moved = False
+        world.jump_ticks = 0
+        yaw_cmd = 0.28 * steer
+    avoid, ahead, open_side = _wall_avoid(world)
+    if ahead < 0.55:
+        yaw_cmd = avoid
+    elif ahead < 1.2:
+        yaw_cmd = 0.55 * yaw_cmd + avoid
     pose.yaw_rate = pose.yaw_rate * 0.75 + yaw_cmd * 0.25
     pose.yaw += pose.yaw_rate
     walking = (not fleeing) and walk >= 0.5 and walk > thrust
     settling = (not fleeing) and land < 0.5 and gesture >= 0.5 and gesture > thrust and gesture > walk
-    _threat, threat_dist = _nearest_volume(world.threats, pose)
-    room_quiet = (not world.foods) and (not fleeing) and (_threat is None or threat_dist >= LOOM_RANGE)
-    body_idle = room_quiet and land < 0.5 and thrust < 0.5 and walk < 0.5
+    pad_goal = (not world.foods) and (not world.threats) and bool(_pads_inside(world))
+    body_idle = (not world.foods) and (not world.threats) and (not pad_goal) and (not fleeing) and land < 0.5 and thrust < 0.5 and walk < 0.5
+    world.climb_bias = 0.85 * world.climb_bias + 0.15 * pitch_up
+    gap, hunter_below = _altitude_gap(world)
+    _pitch_toward(pose, world.climb_bias, land, gap, hunter_below)
     if fleeing:
-        pose.pitch = 0.82 * pose.pitch + 0.18 * 0.65
-        forward = 0.03
-        lift = 0.018
+        forward = 0.034
     elif body_idle:
-        landed = pose.z <= FLOOR_Z + 0.05
-        pose.pitch = 0.82 * pose.pitch + (0.0 if landed else 0.18 * -0.4)
         forward = 0.0
-        lift = 0.0 if landed else -0.03
     elif walking:
-        pose.pitch = 0.82 * pose.pitch + 0.18 * (pitch_up - land)
         forward = 0.012
-        lift = -0.016 if pose.z > FLOOR_Z + 0.28 else 0.0
     elif settling:
-        landed = pose.z <= FLOOR_Z + 0.05
-        pose.pitch = 0.82 * pose.pitch + (0.0 if landed else 0.18 * -0.4)
         forward = 0.0
-        lift = 0.0 if landed else -0.03
+    elif landing and pad_goal:
+        forward = 0.0
     else:
-        pose.pitch = 0.82 * pose.pitch + 0.18 * (pitch_up - land)
         forward = 0.0192 * thrust
-        lift = 0.012 * pose.pitch - (0.02 if land >= 0.5 else 0.0)
-    drag = FLY_DRAG * (0.62 if settling or body_idle else 1.0)
+    cruising = bool(world.threats) and not body_idle and not settling and not landing
+    if cruising:
+        forward = max(forward, 0.016)
+    if ahead < 1.4 and forward > 0.0:
+        if cruising:
+            capped = max(0.016, (ahead - 0.35) * 0.04)
+        else:
+            capped = max(0.0, (ahead - 0.5) * 0.05)
+        forward = min(forward, capped)
+    if landing:
+        lift = _hover_lift(pose.z, True)
+    else:
+        lift = _pitched_lift(pose.vz, pose.pitch, forward, gap)
+    drag = FLY_DRAG * (0.62 if settling else 1.0)
     pose.vx = pose.vx * drag + cos(pose.yaw) * forward
     pose.vy = pose.vy * drag + sin(pose.yaw) * forward
     pose.vz = pose.vz * drag + lift
     pose.vx, pose.vy, pose.vz, pose.speed = _limit_velocity(pose.vx, pose.vy, pose.vz, MAX_FLY_SPEED)
+    _bleed_walls(world)
+    if (
+        ahead < 1.2
+        and open_side != 0.0
+        and cruising
+        and hypot(pose.vx, pose.vy) < 0.03
+    ):
+        heading = pose.yaw + open_side * 1.1
+        pose.vx += cos(heading) * 0.016
+        pose.vy += sin(heading) * 0.016
+    pose.speed = _speed_of(pose.vx, pose.vy, pose.vz)
     pose.x += pose.vx
     pose.y += pose.vy
     pose.z += pose.vz

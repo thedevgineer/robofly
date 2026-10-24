@@ -1,10 +1,11 @@
+import { GizmoHelper, GizmoViewcube } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as THREE from "three";
 import type { NeuronStage } from "./live";
 import { MOTOR_GROUP, MOTOR_NAMES, neuronKind, type ChipGraph } from "./types";
 
-const pointerState = { panned: false };
+export const pointerState = { panned: false };
 
 const ROW_Z = 0.72;
 const STATE_PITCH = 0.1;
@@ -43,7 +44,7 @@ const NET = {
   done: 1.8,
   cycle: 1.56,
 } as const;
-const TONE = { data: "#a7844a", ctrl: "#cbbd9a", write: "#7d5e38", addr: "#6e8c98" };
+const TONE = { data: "#a7844a", ctrl: "#cbbd9a", write: "#7d5e38", addr: "#16140f" };
 
 export const STRUCTURES = [
   "v[256]",
@@ -152,7 +153,7 @@ function labelTexture(text: string): THREE.CanvasTexture {
   const context = canvas.getContext("2d");
   if (!context) throw new Error("label canvas unavailable");
   context.clearRect(0, 0, canvas.width, canvas.height);
-  context.fillStyle = "#1c2836";
+  context.fillStyle = "#16140f";
   context.font = "600 64px sans-serif";
   context.textAlign = "center";
   context.textBaseline = "middle";
@@ -178,23 +179,53 @@ function gridOrigin(center: [number, number], count: number, pitchX: number, pit
   return [center[0] - ((cols - 1) * pitchX) / 2, center[1] - ((rows - 1) * pitchZ) / 2];
 }
 
-const HOME_TARGET = new THREE.Vector3(0, 1.05, 0.15);
-const HOME_THETA = 0.68;
-const HOME_PHI = 1.18;
-const HOME_RADIUS = 19;
+const HOME_TARGET = new THREE.Vector3(0, 0.95, 0.1);
+const HOME_THETA = 0.62;
+const HOME_PHI = 1.05;
+const HOME_RADIUS = 15.5;
+const COMPACT_RADIUS = 17.8;
+const COMPACT_RADIUS_MIN = 16.5;
+const COMPACT_RADIUS_MAX = 18.5;
+const COMPACT_THETA = 0.55;
+const COMPACT_PHI = 1.02;
+const FULL_RADIUS_MIN = 8;
+const FULL_RADIUS_MAX = 22;
 
-function OrbitView({ fitView }: { fitView: number }) {
+export type ViewCmdKind = "reset" | "iso" | "top" | "front" | "side" | "zoomIn" | "zoomOut" | "orbitLeft" | "orbitRight";
+export type ViewCmd = { n: number; kind: ViewCmdKind };
+
+const VIEW_SNAPS: Record<"iso" | "top" | "front" | "side", { theta: number; phi: number; radius: number }> = {
+  iso: { theta: HOME_THETA, phi: HOME_PHI, radius: HOME_RADIUS },
+  top: { theta: 0, phi: 0.32, radius: 16 },
+  front: { theta: 0, phi: 1.22, radius: 16 },
+  side: { theta: Math.PI / 2, phi: 1.05, radius: 16 },
+};
+
+function OrbitView({
+  fitView,
+  viewCmd = null,
+  compact = false,
+}: {
+  fitView: number;
+  viewCmd?: ViewCmd | null;
+  compact?: boolean;
+}) {
   const { camera, gl, size } = useThree();
+  const homeRadius = compact ? COMPACT_RADIUS : HOME_RADIUS;
+  const homeTheta = compact ? COMPACT_THETA : HOME_THETA;
+  const homePhi = compact ? COMPACT_PHI : HOME_PHI;
   const target = useRef(HOME_TARGET.clone());
-  const theta = useRef(HOME_THETA);
-  const phi = useRef(HOME_PHI);
-  const radius = useRef(HOME_RADIUS);
+  const theta = useRef(homeTheta);
+  const phi = useRef(homePhi);
+  const radius = useRef(homeRadius);
+  const dragging = useRef(false);
   const scratch = useMemo(
     () => ({
       forward: new THREE.Vector3(),
       right: new THREE.Vector3(),
       up: new THREE.Vector3(),
       eye: new THREE.Vector3(),
+      offset: new THREE.Vector3(),
     }),
     [],
   );
@@ -220,9 +251,20 @@ function OrbitView({ fitView }: { fitView: number }) {
 
   const frameDie = useMemo(() => {
     return () => {
-      theta.current = HOME_THETA;
-      phi.current = HOME_PHI;
-      radius.current = HOME_RADIUS;
+      theta.current = homeTheta;
+      phi.current = homePhi;
+      radius.current = homeRadius;
+      target.current.copy(HOME_TARGET);
+      apply();
+    };
+  }, [apply, homePhi, homeRadius, homeTheta]);
+
+  const snapTo = useMemo(() => {
+    return (kind: "iso" | "top" | "front" | "side") => {
+      const snap = VIEW_SNAPS[kind];
+      theta.current = snap.theta;
+      phi.current = snap.phi;
+      radius.current = snap.radius;
       target.current.copy(HOME_TARGET);
       apply();
     };
@@ -232,9 +274,44 @@ function OrbitView({ fitView }: { fitView: number }) {
     frameDie();
   }, [frameDie, fitView]);
 
+  const lastViewCmd = useRef(0);
+  useLayoutEffect(() => {
+    if (!viewCmd || compact || viewCmd.n === lastViewCmd.current) return;
+    lastViewCmd.current = viewCmd.n;
+    if (viewCmd.kind === "reset" || viewCmd.kind === "iso") {
+      frameDie();
+      return;
+    }
+    if (viewCmd.kind === "top" || viewCmd.kind === "front" || viewCmd.kind === "side") {
+      snapTo(viewCmd.kind);
+      return;
+    }
+    if (viewCmd.kind === "zoomIn") {
+      radius.current = THREE.MathUtils.clamp(radius.current * 0.88, FULL_RADIUS_MIN, FULL_RADIUS_MAX);
+    } else if (viewCmd.kind === "zoomOut") {
+      radius.current = THREE.MathUtils.clamp(radius.current * 1.12, FULL_RADIUS_MIN, FULL_RADIUS_MAX);
+    } else if (viewCmd.kind === "orbitLeft") {
+      theta.current += 0.28;
+    } else if (viewCmd.kind === "orbitRight") {
+      theta.current -= 0.28;
+    }
+    apply();
+  }, [apply, compact, frameDie, snapTo, viewCmd]);
+
   useEffect(() => {
     apply();
   }, [apply, size.height, size.width]);
+
+  // Keep spherical coords in sync when the viewcube tweens the camera.
+  useFrame(() => {
+    if (compact || dragging.current) return;
+    scratch.offset.copy(camera.position).sub(target.current);
+    const r = scratch.offset.length();
+    if (r < 0.2) return;
+    radius.current = THREE.MathUtils.clamp(r, FULL_RADIUS_MIN, FULL_RADIUS_MAX);
+    theta.current = Math.atan2(scratch.offset.x, scratch.offset.z);
+    phi.current = THREE.MathUtils.clamp(Math.acos(THREE.MathUtils.clamp(scratch.offset.y / r, -1, 1)), 0.28, 1.48);
+  });
 
   useEffect(() => {
     const el = gl.domElement;
@@ -247,14 +324,20 @@ function OrbitView({ fitView }: { fitView: number }) {
     const originTarget = new THREE.Vector3();
 
     function onWheel(event: WheelEvent) {
+      if (compact) return;
       event.preventDefault();
-      radius.current = THREE.MathUtils.clamp(radius.current * (event.deltaY > 0 ? 1.08 : 0.92), 5.5, 36);
+      radius.current = THREE.MathUtils.clamp(
+        radius.current * (event.deltaY > 0 ? 1.08 : 0.92),
+        FULL_RADIUS_MIN,
+        FULL_RADIUS_MAX,
+      );
       apply();
     }
 
     function onDown(event: PointerEvent) {
       if (event.button !== 0) return;
       down = true;
+      dragging.current = true;
       shift = event.shiftKey;
       pointerState.panned = false;
       startX = event.clientX;
@@ -271,6 +354,10 @@ function OrbitView({ fitView }: { fitView: number }) {
       if (Math.hypot(dx, dy) < 4) return;
       pointerState.panned = true;
       if (event.shiftKey || shift) {
+        if (compact) {
+          apply();
+          return;
+        }
         scratch.forward.subVectors(target.current, camera.position).normalize();
         scratch.right.crossVectors(scratch.forward, camera.up).normalize();
         scratch.up.crossVectors(scratch.right, scratch.forward).normalize();
@@ -278,35 +365,54 @@ function OrbitView({ fitView }: { fitView: number }) {
         target.current.copy(originTarget);
         target.current.addScaledVector(scratch.right, -dx * scale);
         target.current.addScaledVector(scratch.up, dy * scale);
-        target.current.x = THREE.MathUtils.clamp(target.current.x, -6, 6);
-        target.current.y = THREE.MathUtils.clamp(target.current.y, -0.2, 2.4);
-        target.current.z = THREE.MathUtils.clamp(target.current.z, -4.5, 4.5);
+        target.current.x = THREE.MathUtils.clamp(target.current.x, -3.2, 3.2);
+        target.current.y = THREE.MathUtils.clamp(target.current.y, 0.4, 1.8);
+        target.current.z = THREE.MathUtils.clamp(target.current.z, -2.4, 2.4);
       } else {
-        theta.current = originTheta - dx * 0.005;
-        phi.current = THREE.MathUtils.clamp(originPhi + dy * 0.004, 0.28, 1.48);
+        if (compact) {
+          theta.current = THREE.MathUtils.clamp(originTheta - dx * 0.003, homeTheta - 0.35, homeTheta + 0.35);
+          phi.current = THREE.MathUtils.clamp(originPhi + dy * 0.0025, 0.92, 1.14);
+          radius.current = THREE.MathUtils.clamp(radius.current, COMPACT_RADIUS_MIN, COMPACT_RADIUS_MAX);
+          target.current.copy(HOME_TARGET);
+        } else {
+          theta.current = originTheta - dx * 0.005;
+          phi.current = THREE.MathUtils.clamp(originPhi + dy * 0.004, 0.28, 1.48);
+        }
       }
       apply();
     }
 
     function onUp() {
       down = false;
+      dragging.current = false;
     }
 
-    el.addEventListener("wheel", onWheel, { passive: false });
+    if (!compact) el.addEventListener("wheel", onWheel, { passive: false });
     el.addEventListener("pointerdown", onDown);
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     el.addEventListener("dblclick", frameDie);
     return () => {
-      el.removeEventListener("wheel", onWheel);
+      if (!compact) el.removeEventListener("wheel", onWheel);
       el.removeEventListener("pointerdown", onDown);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       el.removeEventListener("dblclick", frameDie);
     };
-  }, [apply, camera, frameDie, gl, scratch]);
+  }, [apply, camera, compact, frameDie, gl, homeTheta, scratch]);
 
-  return null;
+  if (compact) return null;
+  return (
+    <GizmoHelper alignment="bottom-left" margin={[56, 56]} onTarget={() => target.current}>
+      <GizmoViewcube
+        color="#f6f4f1"
+        strokeColor="#16140f"
+        textColor="#16140f"
+        hoverColor="#f0b429"
+        opacity={0.96}
+      />
+    </GizmoHelper>
+  );
 }
 
 function ClockPulse({ step, dim }: { step: number; dim: boolean }) {
@@ -343,7 +449,7 @@ function ClockPulse({ step, dim }: { step: number; dim: boolean }) {
   return (
     <mesh ref={mesh} position={CLOCK_PATH[0]}>
       <sphereGeometry args={[0.11, 16, 12]} />
-      <meshStandardMaterial color="#f0b429" emissive="#f0b429" emissiveIntensity={dim ? 0 : 2.2} transparent={dim} opacity={dim ? 0.05 : 1} depthWrite={!dim} />
+      <meshStandardMaterial color="#f0b429" emissive="#f0b429" emissiveIntensity={dim ? 0 : 0.55} transparent={dim} opacity={dim ? 0.05 : 1} depthWrite={!dim} />
     </mesh>
   );
 }
@@ -396,7 +502,7 @@ function BitGrid({
     const color = new THREE.Color();
     for (let id = 0; id < 256; id += 1) {
       if (spikes?.has(id) && hot) color.set(hot);
-      else if (mark?.has(id)) color.set("#7ec8ff");
+      else if (mark?.has(id)) color.set("#f0b429");
       else color.set(idle);
       mesh.setColorAt(id, color);
     }
@@ -446,7 +552,7 @@ function Metal({
   return (
     <mesh position={[(from[0] + to[0]) / 2, y, (from[1] + to[1]) / 2]} rotation={[0, -Math.atan2(dz, dx), 0]} raycast={() => null}>
       <boxGeometry args={[length, height, girth]} />
-      <meshStandardMaterial color={shown} emissive={shown} emissiveIntensity={lit ? 0.65 : 0} metalness={0.82} roughness={0.22} transparent={dim} opacity={dim ? 0.05 : 1} depthWrite={!dim} />
+      <meshStandardMaterial color={shown} emissive={shown} emissiveIntensity={lit ? 0.28 : 0} metalness={0.35} roughness={0.42} transparent={dim} opacity={dim ? 0.05 : 1} depthWrite={!dim} />
     </mesh>
   );
 }
@@ -477,7 +583,7 @@ function Riser({
   return (
     <mesh position={[x, (y0 + y1) / 2, z]} raycast={() => null}>
       <boxGeometry args={[girth, height, girth]} />
-      <meshStandardMaterial color={shown} emissive={shown} emissiveIntensity={lit ? 0.65 : 0} metalness={0.82} roughness={0.22} transparent={dim} opacity={dim ? 0.05 : 1} depthWrite={!dim} />
+      <meshStandardMaterial color={shown} emissive={shown} emissiveIntensity={lit ? 0.28 : 0} metalness={0.35} roughness={0.42} transparent={dim} opacity={dim ? 0.05 : 1} depthWrite={!dim} />
     </mesh>
   );
 }
@@ -507,7 +613,7 @@ function PickBlock({
       {picked ? (
         <mesh raycast={() => null}>
           <boxGeometry args={[size[0] + 0.08, size[1] + 0.08, size[2] + 0.08]} />
-          <meshStandardMaterial color="#7ec8ff" emissive="#7ec8ff" emissiveIntensity={0.9} transparent opacity={0.55} />
+          <meshStandardMaterial color="#f0b429" emissive="#f0b429" emissiveIntensity={0.35} transparent opacity={0.45} />
         </mesh>
       ) : null}
       <mesh
@@ -519,9 +625,9 @@ function PickBlock({
         <boxGeometry args={size} />
         <meshStandardMaterial
           color={color}
-          emissive={picked ? "#7ec8ff" : hot && !dim ? "#f0b429" : "#000000"}
-          emissiveIntensity={picked ? 0.75 : hot && !dim ? 0.45 : 0}
-          metalness={0.4}
+          emissive={picked ? "#f0b429" : hot && !dim ? "#f0b429" : "#000000"}
+          emissiveIntensity={picked ? 0.35 : hot && !dim ? 0.2 : 0}
+          metalness={0.22}
           roughness={0.4}
           transparent={dim}
           opacity={dim ? 0.15 : 1}
@@ -545,7 +651,7 @@ function MarkWire({
   from,
   to,
   face,
-  color = "#8ea0b5",
+  color = "#16140f",
 }: {
   from: [number, number];
   to: [number, number];
@@ -569,7 +675,7 @@ function CellShell({
   const lit = face.hot && !face.dim;
   const hw = w / 2;
   const hd = d / 2;
-  const well = lit ? "#f3d48a" : "#d5dee8";
+  const well = lit ? "#f3d48a" : "#e7e2da";
   return (
     <>
       <mesh
@@ -582,9 +688,9 @@ function CellShell({
         <boxGeometry args={[w, 0.03, d]} />
         <meshStandardMaterial
           color={well}
-          emissive={face.picked ? "#7ec8ff" : lit ? "#f0b429" : "#000000"}
-          emissiveIntensity={face.picked ? 0.4 : lit ? 0.2 : 0}
-          metalness={0.12}
+          emissive={face.picked ? "#f0b429" : lit ? "#f0b429" : "#000000"}
+          emissiveIntensity={face.picked ? 0.22 : lit ? 0.1 : 0}
+          metalness={0.08}
           roughness={0.72}
           transparent={face.dim}
           opacity={face.dim ? 0.16 : 0.95}
@@ -592,10 +698,10 @@ function CellShell({
         />
       </mesh>
       <group position={[0, 0.022, 0]}>
-        <MarkWire face={face} color="#6d7e94" from={[-hw, -hd]} to={[hw, -hd]} />
-        <MarkWire face={face} color="#6d7e94" from={[hw, -hd]} to={[hw, hd]} />
-        <MarkWire face={face} color="#6d7e94" from={[hw, hd]} to={[-hw, hd]} />
-        <MarkWire face={face} color="#6d7e94" from={[-hw, hd]} to={[-hw, -hd]} />
+        <MarkWire face={face} color="#16140f" from={[-hw, -hd]} to={[hw, -hd]} />
+        <MarkWire face={face} color="#16140f" from={[hw, -hd]} to={[hw, hd]} />
+        <MarkWire face={face} color="#16140f" from={[hw, hd]} to={[-hw, hd]} />
+        <MarkWire face={face} color="#16140f" from={[-hw, hd]} to={[-hw, -hd]} />
         {children}
       </group>
     </>
@@ -612,7 +718,7 @@ function Outline({ size, position }: { size: [number, number, number]; position:
   useEffect(() => () => edges.dispose(), [edges]);
   return (
     <lineSegments position={position} geometry={edges} raycast={() => null}>
-      <lineBasicMaterial color="#7ec8ff" />
+      <lineBasicMaterial color="#f0b429" />
     </lineSegments>
   );
 }
@@ -653,10 +759,10 @@ function AddMark({ at, face }: { at: [number, number, number]; face: GateFace })
   return (
     <group position={at}>
       <CellShell face={face}>
-        <MarkWire face={face} color="#7f93ab" from={[-0.17, 0.05]} to={[0, 0]} />
-        <MarkWire face={face} color="#7f93ab" from={[-0.17, -0.05]} to={[0, 0]} />
-        <MarkWire face={face} color="#7f93ab" from={[0, 0.14]} to={[0, 0]} />
-        <MarkWire face={face} color="#7f93ab" from={[0, 0]} to={[0.17, 0]} />
+        <MarkWire face={face} color="#16140f" from={[-0.17, 0.05]} to={[0, 0]} />
+        <MarkWire face={face} color="#16140f" from={[-0.17, -0.05]} to={[0, 0]} />
+        <MarkWire face={face} color="#16140f" from={[0, 0.14]} to={[0, 0]} />
+        <MarkWire face={face} color="#16140f" from={[0, 0]} to={[0.17, 0]} />
       </CellShell>
     </group>
   );
@@ -678,8 +784,8 @@ function MuxMark({ at, face }: { at: [number, number, number]; face: GateFace })
   return (
     <group position={at}>
       <CellShell face={face}>
-        <MarkWire face={face} color="#6e8c98" from={[-0.17, 0.06]} to={[0.04, 0]} />
-        <MarkWire face={face} color="#6e8c98" from={[-0.17, -0.06]} to={[0.04, 0]} />
+        <MarkWire face={face} color="#16140f" from={[-0.17, 0.06]} to={[0.04, 0]} />
+        <MarkWire face={face} color="#16140f" from={[-0.17, -0.06]} to={[0.04, 0]} />
         <MarkWire face={face} color="#cbbd9a" from={[0, 0.14]} to={[0, 0]} />
         <MarkWire face={face} color="#a7844a" from={[0, -0.14]} to={[0.04, 0]} />
         <MarkWire face={face} color="#7d5e38" from={[0.04, 0]} to={[0.17, 0]} />
@@ -693,8 +799,8 @@ function AndMark({ at, face }: { at: [number, number, number]; face: GateFace })
     <group position={at}>
       <CellShell face={face}>
         <MarkWire face={face} from={[-0.17, 0]} to={[0.17, 0]} />
-        <MarkWire face={face} color="#6e8c98" from={[-0.05, -0.08]} to={[-0.05, 0.08]} />
-        <MarkWire face={face} color="#6e8c98" from={[0, -0.14]} to={[0, 0.08]} />
+        <MarkWire face={face} color="#16140f" from={[-0.05, -0.08]} to={[-0.05, 0.08]} />
+        <MarkWire face={face} color="#16140f" from={[0, -0.14]} to={[0, 0.08]} />
       </CellShell>
     </group>
   );
@@ -712,7 +818,7 @@ function InvMark({ at, face }: { at: [number, number, number]; face: GateFace })
         <MarkWire face={face} color="#cbbd9a" from={[0.06, 0]} to={[0, -0.14]} />
         <mesh position={[0.12, 0, 0]} raycast={() => null}>
           <sphereGeometry args={[0.018, 8, 8]} />
-          <meshStandardMaterial color={shown} emissive={lit ? shown : "#000000"} emissiveIntensity={lit ? 0.45 : 0} transparent={face.dim} opacity={face.dim ? 0.15 : 1} depthWrite={!face.dim} />
+          <meshStandardMaterial color={shown} emissive={lit ? shown : "#000000"} emissiveIntensity={lit ? 0.22 : 0} transparent={face.dim} opacity={face.dim ? 0.15 : 1} depthWrite={!face.dim} />
         </mesh>
         <MarkWire face={face} color="#cbbd9a" from={[0.14, 0]} to={[0.17, 0]} />
       </CellShell>
@@ -726,11 +832,11 @@ function RegMark({ at, face, wide = 0.18, depth = 0.22 }: { at: [number, number,
   return (
     <group position={at}>
       <CellShell face={face} w={wide} d={depth}>
-        <MarkWire face={face} color="#7f93ab" from={[-hw, 0]} to={[hw, 0]} />
-        <MarkWire face={face} color="#7f93ab" from={[-hw * 0.45, 0.035]} to={[hw * 0.45, 0.035]} />
-        <MarkWire face={face} color="#7f93ab" from={[hw * 0.45, 0.035]} to={[hw * 0.45, -0.02]} />
-        <MarkWire face={face} color="#7f93ab" from={[hw * 0.45, -0.02]} to={[-hw * 0.45, -0.02]} />
-        <MarkWire face={face} color="#7f93ab" from={[-hw * 0.45, -0.02]} to={[-hw * 0.45, 0.035]} />
+        <MarkWire face={face} color="#16140f" from={[-hw, 0]} to={[hw, 0]} />
+        <MarkWire face={face} color="#16140f" from={[-hw * 0.45, 0.035]} to={[hw * 0.45, 0.035]} />
+        <MarkWire face={face} color="#16140f" from={[hw * 0.45, 0.035]} to={[hw * 0.45, -0.02]} />
+        <MarkWire face={face} color="#16140f" from={[hw * 0.45, -0.02]} to={[-hw * 0.45, -0.02]} />
+        <MarkWire face={face} color="#16140f" from={[-hw * 0.45, -0.02]} to={[-hw * 0.45, 0.035]} />
         <MarkWire face={face} color="#cbbd9a" from={[0, 0]} to={[0, hd]} />
       </CellShell>
     </group>
@@ -791,7 +897,7 @@ function MotorGates(face: GateFace) {
       <AddMark at={[0.28, 0.55, -0.16]} face={face} />
       <Jump from={[-0.15, 0.16]} to={[0.11, -0.16]} y={0.7} hot={face.hot} dim={face.dim} />
       <Jump from={[-0.32, 0.02]} to={[0, 0]} y={0.74} hot={face.hot} dim={face.dim} />
-      <Jump from={[0, 0]} to={[-0.49, 0.16]} y={0.66} hot={face.hot} dim={face.dim} color="#6e8c98" />
+      <Jump from={[0, 0]} to={[-0.49, 0.16]} y={0.66} hot={face.hot} dim={face.dim} color="#16140f" />
       <Jump from={[0.45, -0.16]} to={[0, 0]} y={0.76} hot={face.hot} dim={face.dim} color="#7d5e38" />
     </group>
   );
@@ -862,9 +968,9 @@ function NeuronBody({ wide, face }: { wide: number; face: GateFace }) {
         <boxGeometry args={[wide, 0.07, depth]} />
         <meshStandardMaterial
           color={shown}
-          emissive={face.picked ? "#7ec8ff" : lit ? shown : "#000000"}
-          emissiveIntensity={face.picked ? 0.7 : lit ? 0.55 : 0}
-          metalness={0.55}
+          emissive={face.picked ? "#f0b429" : lit ? shown : "#000000"}
+          emissiveIntensity={face.picked ? 0.3 : lit ? 0.18 : 0}
+          metalness={0.28}
           roughness={0.35}
           transparent={face.dim}
           opacity={face.dim ? 0.15 : 1}
@@ -908,7 +1014,7 @@ function SynapseSram({ pre, spikes, show, mark, dim = false }: { pre: number[]; 
     const color = new THREE.Color();
     for (let row = 0; row < pre.length; row += 1) {
       if (show && spikes.has(pre[row])) color.set("#f2c14e");
-      else if (mark.has(pre[row])) color.set("#7ec8ff");
+      else if (mark.has(pre[row])) color.set("#f0b429");
       else color.set("#6e9a86");
       mesh.setColorAt(row, color);
     }
@@ -948,9 +1054,9 @@ function MotorIndex({ spikes, show, mark, onPick, dim = false }: { spikes: Set<n
   useLayoutEffect(() => {
     const color = new THREE.Color();
     for (let id = 0; id < 256; id += 1) {
-      if (show && spikes.has(id)) color.set("#9ec0ff");
-      else if (mark.has(id)) color.set("#7ec8ff");
-      else color.set("#8aa0b8");
+      if (show && spikes.has(id)) color.set("#f0b429");
+      else if (mark.has(id)) color.set("#f0b429");
+      else color.set("#16140f");
       mesh.setColorAt(id, color);
     }
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
@@ -989,7 +1095,7 @@ function Pad({ name, position, width = 0.42 }: { name: string; position: [number
     <group position={position}>
       <mesh>
         <boxGeometry args={[width, 0.08, 0.28]} />
-        <meshStandardMaterial color="#c6a15a" metalness={0.75} roughness={0.28} />
+        <meshStandardMaterial color="#c6a15a" metalness={0.35} roughness={0.45} />
       </mesh>
       <Label text={name} position={[0, 0.1, 0]} width={width + 0.12} />
     </group>
@@ -1040,7 +1146,7 @@ function Vias({ segments, color, opacity = 1 }: { segments: Seg[]; color: string
   return (
     <instancedMesh ref={mesh} args={[undefined, undefined, segments.length]} frustumCulled={false} raycast={() => null}>
       <cylinderGeometry args={[0.008, 0.008, 1, 5]} />
-      <meshStandardMaterial color={color} emissive={color} emissiveIntensity={opacity < 1 ? 0 : 0.45} metalness={0.62} roughness={0.3} transparent={opacity < 1} opacity={opacity} />
+      <meshStandardMaterial color={color} emissive={color} emissiveIntensity={opacity < 1 ? 0 : 0.18} metalness={0.32} roughness={0.45} transparent={opacity < 1} opacity={opacity} />
     </instancedMesh>
   );
 }
@@ -1245,10 +1351,10 @@ function StageBoard({
           <mesh>
             <boxGeometry args={[1.12, 0.07, 0.34]} />
             <meshStandardMaterial
-              color={title === "spike" && stage?.spike ? "#f0b429" : "#6d7e94"}
+              color={title === "spike" && stage?.spike ? "#f0b429" : "#16140f"}
               emissive={title === "spike" && stage?.spike ? "#f0b429" : "#000000"}
-              emissiveIntensity={title === "spike" && stage?.spike ? 0.45 : 0}
-              metalness={0.35}
+              emissiveIntensity={title === "spike" && stage?.spike ? 0.22 : 0}
+              metalness={0.2}
               roughness={0.45}
             />
           </mesh>
@@ -1271,9 +1377,9 @@ function StageBoard({
             >
               <boxGeometry args={[Math.max(length, 0.08), 0.06, 0.12]} />
               <meshStandardMaterial
-                color={id === pinned ? "#7ec8ff" : spiked ? "#f0b429" : "#3d7ea6"}
-                emissive={id === pinned ? "#7ec8ff" : spiked ? "#f0b429" : "#000000"}
-                emissiveIntensity={id === pinned || spiked ? 0.35 : 0}
+                color={id === pinned ? "#f0b429" : spiked ? "#f0b429" : "#16140f"}
+                emissive={id === pinned ? "#f0b429" : spiked ? "#f0b429" : "#000000"}
+                emissiveIntensity={id === pinned || spiked ? 0.18 : 0}
               />
             </mesh>
             <Label text={`${id} ${neuronKind(id)}`} position={[0.72, 0.08, 0]} width={0.85} />
@@ -1365,7 +1471,7 @@ function Die({
     <group>
       <mesh>
         <boxGeometry args={[10.2, 0.14, 7.3]} />
-        <meshStandardMaterial color="#c5ced6" metalness={0.45} roughness={0.38} />
+        <meshStandardMaterial color="#e4d7bc" metalness={0.22} roughness={0.5} />
       </mesh>
       <ClockPulse step={step} dim={structure !== null && structure !== "tick_ctrl" && structure !== "cycle_count"} />
 
@@ -1374,7 +1480,7 @@ function Die({
         picked={structure === "v[256]"}
         dim={dimOf("v[256]")}
         hot={false}
-        idle="#c5d0dc"
+        idle="#e4d7bc"
         position={[STATE_CENTER[0], 0.12, STATE_CENTER[1]]}
         size={[16 * STATE_PITCH + 0.06, 0.04, 16 * STATE_PITCH + 0.06]}
         onPick={onPickStructure}
@@ -1383,7 +1489,7 @@ function Die({
         center={STATE_CENTER}
         pitch={STATE_PITCH}
         cell={0.072}
-        idle="#7f93ab"
+        idle="#16140f"
         hot="#f0b429"
         spikes={litState}
         mark={focus}
@@ -1440,13 +1546,13 @@ function Die({
       {layout.risers.map((riser, index) => (
         <Riser key={index} x={riser.x} z={riser.z} y0={riser.y0} y1={riser.y1} color={riser.color} active={netHot(riser.net)} dim={dimNet(riser.net)} />
       ))}
-      <WireLines segments={rest.structure} color="#4e6274" opacity={structure && structure !== "v[256]" && structure !== "spikes" ? 0.12 : 0.85} />
+      <WireLines segments={rest.structure} color="#16140f" opacity={structure && structure !== "v[256]" && structure !== "spikes" ? 0.12 : 0.85} />
       <GiantFiber neurons={graph.neurons} pre={graph.synapses.pre} post={graph.synapses.post} spiked={spiked} structure={structure} onPick={onPickStructure} />
       <Vias segments={vias.data} color="#f0b429" opacity={structure ? 0.12 : 1} />
       <Vias segments={vias.ctrl} color="#f3e2b3" opacity={structure ? 0.12 : 1} />
       <Vias segments={vias.write} color="#ff9a4a" opacity={structure ? 0.12 : 1} />
-      <Vias segments={vias.addr} color="#8fd0c4" opacity={structure ? 0.12 : 1} />
-      <Vias segments={vias.focus} color="#7ec8ff" />
+      <Vias segments={vias.addr} color="#a7844a" opacity={structure ? 0.12 : 1} />
+      <Vias segments={vias.focus} color="#f0b429" />
 
       <PickBlock
         name="weight sram"
@@ -1478,7 +1584,7 @@ function Die({
 
       <mesh position={[INDEX_CENTER[0], 0.12, INDEX_CENTER[1]]}>
         <boxGeometry args={[16 * INDEX_PITCH + 0.1, 0.04, 16 * INDEX_PITCH + 0.1]} />
-        <meshStandardMaterial color="#c5d0dc" />
+        <meshStandardMaterial color="#e4d7bc" />
       </mesh>
       <MotorIndex spikes={motorSpikes} show={showMotors} mark={focus} onPick={onSelectNeuron} dim={structure !== null} />
       <Label text="motor_index" position={[INDEX_CENTER[0], 0.4, INDEX_CENTER[1] - 0.78]} width={1.35} />
@@ -1733,9 +1839,12 @@ export function ChipScene({
   motorRates,
   focusIds,
   fitView,
+  viewCmd = null,
   onSelectNeuron,
   structure,
   onPickStructure,
+  transparent = false,
+  compact = false,
 }: {
   graph: ChipGraph;
   spikes: number[];
@@ -1746,18 +1855,21 @@ export function ChipScene({
   motorRates: Record<string, number>;
   focusIds: number[];
   fitView: number;
+  viewCmd?: ViewCmd | null;
   onSelectNeuron: (id: number) => void;
   structure: StructureName | null;
   onPickStructure: (name: StructureName) => void;
+  transparent?: boolean;
+  compact?: boolean;
 }) {
   return (
-    <Canvas camera={{ position: [11.04, 8.24, 13.79], fov: 30, near: 0.08, far: 90 }}>
-      <color attach="background" args={["#e7eef5"]} />
-      <ambientLight intensity={1.15} />
-      <hemisphereLight args={["#f4f7fb", "#c5d0dc", 0.55]} />
-      <directionalLight position={[4, 12, 6]} intensity={1.55} />
-      <directionalLight position={[-8, 6, -4]} intensity={0.65} />
-      <OrbitView fitView={fitView} />
+    <Canvas gl={{ alpha: transparent, antialias: true }} camera={{ position: [9.2, 6.8, 11.4], fov: compact ? 34 : 28, near: 0.08, far: 90 }}>
+      {transparent ? null : <color attach="background" args={["#f6f4f1"]} />}
+      <ambientLight intensity={1.05} />
+      <hemisphereLight args={["#f6f4f1", "#e4d7bc", 0.5]} />
+      <directionalLight position={[4, 12, 6]} intensity={1.25} />
+      <directionalLight position={[-8, 6, -4]} intensity={0.5} />
+      <OrbitView fitView={fitView} viewCmd={viewCmd} compact={compact} />
       <Die
         graph={graph}
         spikes={spikes}
@@ -1774,3 +1886,4 @@ export function ChipScene({
     </Canvas>
   );
 }
+

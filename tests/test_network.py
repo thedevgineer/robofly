@@ -21,6 +21,33 @@ def test_graph_matches_topology():
     assert graph["neurons"][254]["motor"] == "rest"
 
 
+def test_left_loom_turns_away():
+    topology = build_default_topology()
+    network = SpikingNetwork(topology)
+    drive = np.zeros(topology.n, dtype=np.float32)
+    drive[93] = 2.0
+    yaw_right = 0.0
+    yaw_left = 0.0
+    for _ in range(8):
+        snap = network.step(drive)
+        yaw_right = max(yaw_right, snap.motor_rates["yaw_right"])
+        yaw_left = max(yaw_left, snap.motor_rates["yaw_left"])
+    assert yaw_right > yaw_left
+    assert yaw_right >= 0.5
+
+
+def test_rear_loom_does_not_yaw():
+    topology = build_default_topology()
+    network = SpikingNetwork(topology)
+    drive = np.zeros(topology.n, dtype=np.float32)
+    drive[88] = 2.0
+    yaw = 0.0
+    for _ in range(16):
+        snap = network.step(drive)
+        yaw = max(yaw, snap.motor_rates["yaw_left"], snap.motor_rates["yaw_right"])
+    assert yaw == 0.0
+
+
 def test_looming_drives_escape_motor():
     topology = build_default_topology()
     network = SpikingNetwork(topology)

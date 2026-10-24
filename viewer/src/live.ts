@@ -20,11 +20,13 @@ const SCENARIO_ID: Record<Scenario, number> = {
   obstacle: 2,
   landing: 3,
   silent: 4,
+  yard: 5,
 };
 
 const SNAP_LEN = 7144;
 const MOTOR_COUNT = 12;
-const LAYOUT_LEN = 792;
+const LAYOUT_LEN = 3096;
+const HALF_Z = 1.175;
 
 type Exports = {
   memory: WebAssembly.Memory;
@@ -38,6 +40,7 @@ type Exports = {
   set_layout: (len: number) => number;
   set_hold: (action: number) => void;
   step: () => void;
+  respawn: () => void;
 };
 
 export type LiveSim = {
@@ -45,6 +48,7 @@ export type LiveSim = {
   setLayout: (layout: Layout) => void;
   setHold: (action: number) => void;
   step: () => void;
+  respawn: () => void;
   read: () => LiveFrame;
   readLayout: () => Layout;
 };
@@ -104,6 +108,7 @@ function readFrame(memory: WebAssembly.Memory, ptr: number): LiveFrame {
     motor_rates[name] = data.getFloat32(112 + index * 4, true);
   });
   const driveNonzero = data.getUint32(112 + MOTOR_COUNT * 4, true);
+  const downed = data.getUint32(164, true) !== 0;
   const base = 112 + MOTOR_COUNT * 4 + 8;
   const plane = 256 * 4;
   const stages: NeuronStage[] = [];
@@ -150,6 +155,7 @@ function readFrame(memory: WebAssembly.Memory, ptr: number): LiveFrame {
     drive_nonzero: driveNonzero,
     voltage_sample,
     eaten,
+    downed,
     inside_room: inside,
     food: foods[0] ?? null,
     foods,
@@ -193,12 +199,14 @@ function readLayout(memory: WebAssembly.Memory, ptr: number): Layout {
   }
   const obstacles = [];
   for (let index = 0; index < nWall; index += 1) {
-    const at = 536 + index * 32;
+    const at = 536 + index * 40;
+    const height = data.getFloat64(at + 32, true);
     obstacles.push({
       min_x: data.getFloat64(at, true),
       max_x: data.getFloat64(at + 8, true),
       min_y: data.getFloat64(at + 16, true),
       max_y: data.getFloat64(at + 24, true),
+      height: height > 0 ? height : HALF_Z,
     });
   }
   return { room, foods, threats, landings, obstacles, pose };
@@ -208,8 +216,8 @@ function packLayout(layout: Layout): ArrayBuffer {
   const foods = layout.foods.slice(0, 6);
   const threats = layout.threats.slice(0, 4);
   const landings = layout.landings.slice(0, 4);
-  const walls = layout.obstacles.slice(0, 8);
-  const bytes = new ArrayBuffer(88 + (foods.length + threats.length + landings.length) * 32 + walls.length * 32);
+  const walls = layout.obstacles.slice(0, 64);
+  const bytes = new ArrayBuffer(88 + (foods.length + threats.length + landings.length) * 32 + walls.length * 40);
   const data = new DataView(bytes);
   let cursor = 0;
   const f64 = (value: number) => {
@@ -247,6 +255,7 @@ function packLayout(layout: Layout): ArrayBuffer {
     f64(wall.max_x);
     f64(wall.min_y);
     f64(wall.max_y);
+    f64(wall.height && wall.height > 0 ? wall.height : HALF_Z);
   });
   return bytes;
 }
@@ -279,6 +288,9 @@ export async function loadLive(): Promise<LiveSim> {
     },
     step() {
       api.step();
+    },
+    respawn() {
+      api.respawn();
     },
     read,
     readLayout: readLayoutNow,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import floor, pi, sin
 from typing import Literal
 
 import numpy as np
@@ -44,6 +45,33 @@ LC4 = 104
 GIANT_FIBER = 105
 PSI = 106
 CHAIN_WEIGHT = 1.15
+LOOM_BINS = 8
+
+
+def loom_bin_center(channel: int) -> float:
+    """Body-frame center of one loom bin. 0 is ahead and positive is left."""
+    return -pi + (channel + 0.5) * (2 * pi / LOOM_BINS)
+
+
+def loom_bin_index(bearing: float) -> int:
+    """Bin containing a body-frame bearing in (-pi, pi]."""
+    sector = (bearing + pi) / (2 * pi) * LOOM_BINS
+    return int(floor(sector)) % LOOM_BINS
+
+
+def loom_yaw_target(channel: int) -> tuple[str, float]:
+    """Yaw pair that turns away from this bin, and that synapse's weight.
+
+    Side and front bins use the full chain weight so one LPLC2 spike crosses
+    threshold. The two rear bins use a fraction of |sin| of the bin center.
+    That stays under the leak of a spike every refractory cycle, so a threat
+    already behind does not spin the fly.
+    """
+    center = loom_bin_center(channel)
+    group = "yaw_right" if sin(center) > 0 else "yaw_left"
+    rear = abs(center) > 3 * pi / 4
+    weight = CHAIN_WEIGHT * abs(sin(center)) * 0.4 if rear else CHAIN_WEIGHT
+    return group, weight
 CIRCUIT_IDS = {
     **{neuron: "lplc2" for neuron in LPLC2},
     LC4: "lc4",
@@ -125,6 +153,10 @@ def build_default_topology(n: int = 256, seed: int = 1701) -> Topology:
         add(GIANT_FIBER, int(dst), CHAIN_WEIGHT)
     for dst in motor_groups["thrust"]:
         add(PSI, int(dst), CHAIN_WEIGHT)
+    for channel, src in enumerate(LPLC2):
+        group, yaw_weight = loom_yaw_target(channel)
+        for dst in motor_groups[group]:
+            add(int(src), int(dst), yaw_weight)
 
     for src in loom:
         for dst in motor_groups["escape"]:

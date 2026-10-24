@@ -19,7 +19,7 @@ def test_landmarks_match_scenario():
     loom = landmarks("loom")
     assert food["room"]["max_x"] > food["room"]["min_x"]
     assert food["food"]["kind"] == "food"
-    assert food["obstacles"] == []
+    assert len(food["obstacles"]) == 17
     assert loom["threat"]["kind"] == "threat"
     assert landmarks("obstacle")["obstacles"][0]["kind"] == "barrier"
     assert landmarks("silent")["food"] is None
@@ -28,13 +28,13 @@ def test_landmarks_match_scenario():
 
 def test_layout_roundtrip_keeps_two_foods_until_one_is_eaten(tmp_path: Path):
     layout = layout_from_world(make_world("food"))
-    layout["foods"].append({"kind": "food", "x": -3.2, "y": -3.2, "z": 1.0, "radius": 0.45})
-    summary = run_simulation(tmp_path / "custom", steps=120, scenario="custom", layout=layout)
+    layout["foods"].append({"kind": "food", "x": 8.5, "y": 1.5, "z": 1.0, "radius": 0.45})
+    summary = run_simulation(tmp_path / "custom", steps=400, scenario="custom", layout=layout)
     assert len(summary["layout"]["foods"]) == 2
     frames = read_trace(tmp_path / "custom")
     assert frames[0]["driven"]
+    assert len(frames[0]["foods"]) == 2
     assert any(len(frame["foods"]) == 1 for frame in frames)
-    assert not any(frame["eaten"] for frame in frames)
 
 
 def test_layout_rejects_objects_outside_the_room_and_over_the_cap():
@@ -44,7 +44,7 @@ def test_layout_rejects_objects_outside_the_room_and_over_the_cap():
         world_from_layout(layout)
     layout = layout_from_world(make_world("silent"))
     layout["obstacles"] = [
-        {"min_x": -1, "max_x": -0.4, "min_y": -1, "max_y": -0.4} for _ in range(9)
+        {"min_x": -1, "max_x": -0.4, "min_y": -1, "max_y": -0.4} for _ in range(65)
     ]
     with pytest.raises(ValueError, match="limits"):
         world_from_layout(layout)
@@ -52,7 +52,7 @@ def test_layout_rejects_objects_outside_the_room_and_over_the_cap():
 
 def test_close_enemy_drives_escape(tmp_path: Path):
     layout = layout_from_world(make_world("silent"))
-    layout["threats"] = [{"kind": "threat", "x": -0.5, "y": 0.2, "z": 1.0, "radius": 0.45}]
+    layout["threats"] = [{"kind": "threat", "x": -1.6, "y": 0.2, "z": 1.0, "radius": 0.45}]
     run_simulation(tmp_path / "enemy", steps=30, scenario="custom", layout=layout)
     frames = read_trace(tmp_path / "enemy")
     assert any(frame["motor_rates"]["escape"] >= 0.5 for frame in frames)

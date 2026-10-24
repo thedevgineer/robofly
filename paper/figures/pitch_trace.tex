@@ -1,0 +1,41 @@
+\documentclass[border=6pt]{standalone}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\begin{document}
+\begin{tikzpicture}
+\begin{axis}[
+  width=14.2cm,
+  height=6.4cm,
+  xlabel={tick (50\,ms)},
+  ylabel={height (m)},
+  xmin=0,
+  xmax=79,
+  ymin=1.05,
+  ymax=1.55,
+  axis y line*=left,
+  tick label style={font=\small},
+  label style={font=\small},
+  legend style={at={(0.5,1.02)}, anchor=south, legend columns=2, draw=none, font=\small},
+]
+\addplot[black, thick] table[x=step, y=z] {pitch.dat};
+\addlegendentry{height}
+\end{axis}
+\begin{axis}[
+  width=14.2cm,
+  height=6.4cm,
+  xmin=0,
+  xmax=79,
+  ymin=-0.2,
+  ymax=0.2,
+  axis y line*=right,
+  axis x line=none,
+  ylabel={pitch (rad)},
+  tick label style={font=\small},
+  label style={font=\small},
+  legend style={at={(0.98,0.08)}, anchor=south east, draw=none, font=\small},
+]
+\addplot[black!45, thick] table[x=step, y=pitch] {pitch.dat};
+\addlegendentry{pitch}
+\end{axis}
+\end{tikzpicture}
+\end{document}

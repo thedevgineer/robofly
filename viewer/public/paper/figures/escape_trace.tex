@@ -1,0 +1,28 @@
+\documentclass[border=6pt]{standalone}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\begin{document}
+\begin{tikzpicture}
+\begin{axis}[
+  width=14.2cm,
+  height=6.2cm,
+  xlabel={tick (50\,ms)},
+  ylabel={rate},
+  ymin=-0.05,
+  ymax=1.15,
+  xmin=0,
+  xmax=79,
+  legend style={at={(0.5,1.02)}, anchor=south, legend columns=3, draw=none, font=\small},
+  tick label style={font=\small},
+  label style={font=\small},
+  ytick={0,0.5,1},
+  every axis plot/.append style={ycomb, very thick, mark=*},
+  restrict y to domain=0.05:1.2,
+]
+\addplot[black, mark options={fill=black}] table[x=step, y=escape] {escape.dat};
+\addplot[black!55, mark options={fill=black!55}] table[x=step, y=thrust] {escape.dat};
+\addplot[black!75, dashed, mark options={fill=black!75}] table[x=step, y=yaw_right] {escape.dat};
+\legend{escape, thrust, yaw right}
+\end{axis}
+\end{tikzpicture}
+\end{document}

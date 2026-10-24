@@ -24,6 +24,7 @@ export type Frame = {
   drive_nonzero: number;
   voltage_sample: number[];
   eaten: boolean;
+  downed?: boolean;
   inside_room: boolean;
   food: Landmark | null;
   foods?: Landmark[];
@@ -73,7 +74,7 @@ export type Layout = {
   foods: Landmark[];
   threats: Landmark[];
   landings: Landmark[];
-  obstacles: Array<Pick<Barrier, "min_x" | "max_x" | "min_y" | "max_y">>;
+  obstacles: Array<Pick<Barrier, "min_x" | "max_x" | "min_y" | "max_y"> & { height?: number }>;
   pose: { x: number; y: number; z: number; yaw: number; pitch: number };
 };
 
@@ -96,7 +97,7 @@ export type RunSummary = {
   run_dir?: string;
 };
 
-export const SCENARIOS = ["food", "loom", "obstacle", "landing", "silent"] as const;
+export const SCENARIOS = ["yard", "food", "loom", "obstacle", "landing", "silent"] as const;
 export type Scenario = (typeof SCENARIOS)[number];
 
 export const MOTOR_NAMES = [

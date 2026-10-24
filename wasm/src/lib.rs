@@ -6,12 +6,13 @@ const N: usize = 256;
 const MAX_FOODS: usize = 6;
 const MAX_THREATS: usize = 4;
 const MAX_PADS: usize = 4;
-const MAX_WALLS: usize = 8;
+const MAX_WALLS: usize = 64;
 const BODY: f64 = 0.18;
-const VISION_RANGE: f64 = 2.3;
-const LOOM_RANGE: f64 = 7.0;
+const VISION_RANGE: f64 = 1.6;
+const LOOM_RANGE: f64 = 8.0;
 const PREDATOR_SPEED: f64 = 0.06;
-const PREDATOR_DRAG: f64 = 0.88;
+const PREDATOR_DRAG: f64 = 0.75;
+const CHASE_RANGE: f64 = 36.0;
 const FLY_DRAG: f64 = 0.88;
 const MAX_FLY_SPEED: f64 = 0.24;
 const FLOOR_Z: f64 = 0.12;
@@ -21,7 +22,11 @@ const THRESHOLD: f32 = 1.0;
 
 const MOTOR_COUNT: usize = 12;
 const SNAP_LEN: usize = 7144;
-const LAYOUT_LEN: usize = 792;
+const LAYOUT_LEN: usize = 3096;
+const HALF_Z: f64 = CEILING_Z * 0.5;
+const SCENT_CELL: f64 = 0.5;
+const SCENT_LENGTH: f64 = 40.0;
+const DIAG: f64 = 1.4142135623730951;
 
 static SIM: Mutex<Option<Sim>> = Mutex::new(None);
 
@@ -41,6 +46,7 @@ struct Wall {
     max_x: f64,
     min_y: f64,
     max_y: f64,
+    height: f64,
 }
 
 struct Topology {
@@ -80,6 +86,21 @@ struct Sim {
     started_with_food: bool,
     predator_speed: f64,
     escape_hold: i32,
+    saccade_cool: i32,
+    jump_ticks: i32,
+    escape_moved: bool,
+    yaw_latch: f64,
+    yaw_latch_age: i32,
+    climb_bias: f64,
+    landing_hold: i32,
+    spawn_shield: i32,
+    downed: bool,
+    rng: u32,
+    scent_key: Vec<f64>,
+    scent_cols: usize,
+    scent_rows: usize,
+    scent_blocked: Vec<bool>,
+    scent_dist: Vec<f64>,
     hold: i32,
     start_pose: [f64; 5],
     start_foods: Vec<Obj>,
@@ -172,6 +193,21 @@ impl Sim {
             started_with_food: false,
             predator_speed: 0.0,
             escape_hold: 0,
+            saccade_cool: 0,
+            jump_ticks: 0,
+            escape_moved: false,
+            yaw_latch: 0.0,
+            yaw_latch_age: 0,
+            climb_bias: 0.0,
+            landing_hold: 0,
+            spawn_shield: 0,
+            downed: false,
+            rng: 1701,
+            scent_key: Vec::new(),
+            scent_cols: 0,
+            scent_rows: 0,
+            scent_blocked: Vec::new(),
+            scent_dist: Vec::new(),
             hold: 0,
             start_pose: [0.0, 0.0, 1.0, 0.0, 0.0],
             start_foods: Vec::new(),
@@ -192,6 +228,16 @@ impl Sim {
         self.ticks = 0;
         self.eaten = false;
         self.escape_hold = 0;
+        self.saccade_cool = 0;
+        self.jump_ticks = 0;
+        self.escape_moved = false;
+        self.yaw_latch = 0.0;
+        self.yaw_latch_age = 0;
+        self.climb_bias = 0.0;
+        self.landing_hold = 0;
+        self.spawn_shield = 0;
+        self.downed = false;
+        self.rng = 1701;
         self.hold = 0;
         self.pose_speed = 0.0;
         self.pose_vx = 0.0;
@@ -225,17 +271,54 @@ impl Sim {
         self.landings.push(far);
         match scenario {
             0 => {
-                self.room_min_x = -12.0;
-                self.room_max_x = 24.0;
-                self.room_min_y = -12.0;
-                self.room_max_y = 18.0;
-                self.foods.push(still_obj(2.4, 1.9, 1.0, 0.45));
+                self.room_min_x = 0.0;
+                self.room_max_x = 20.0;
+                self.room_min_y = 0.0;
+                self.room_max_y = 14.0;
+                self.pose_x = 1.0;
+                self.pose_y = 1.0;
+                self.pose_yaw = 0.0;
+                self.foods.push(still_obj(13.0, 5.0, 1.0, 0.45));
+                for (x0, x1, y0, y1) in [
+                    (1.75, 2.25, 3.75, 14),
+                    (3.75, 4.25, 3.75, 12.25),
+                    (5.75, 6.25, 1.75, 4.25),
+                    (5.75, 6.25, 5.75, 8.25),
+                    (5.75, 6.25, 9.75, 12.25),
+                    (7.75, 8.25, 0, 2.25),
+                    (7.75, 8.25, 3.75, 6.25),
+                    (7.75, 8.25, 7.75, 10.25),
+                    (9.75, 10.25, 1.75, 4.25),
+                    (9.75, 10.25, 5.75, 8.25),
+                    (9.75, 10.25, 9.75, 12.25),
+                    (11.75, 12.25, 0, 2.25),
+                    (11.75, 12.25, 5.75, 10.25),
+                    (13.75, 14.25, 1.75, 8.25),
+                    (15.75, 16.25, 1.75, 4.25),
+                    (15.75, 16.25, 5.75, 10.25),
+                    (17.75, 18.25, 0, 6.25),
+                    (17.75, 18.25, 11.75, 14),
+                    (0, 6.25, 1.75, 2.25),
+                    (13.75, 16.25, 1.75, 2.25),
+                    (5.75, 14.25, 3.75, 4.25),
+                    (5.75, 8.25, 5.75, 6.25),
+                    (9.75, 12.25, 5.75, 6.25),
+                    (15.75, 18.25, 5.75, 6.25),
+                    (3.75, 6.25, 7.75, 8.25),
+                    (7.75, 10.25, 7.75, 8.25),
+                    (17.75, 20, 7.75, 8.25),
+                    (5.75, 8.25, 9.75, 10.25),
+                    (11.75, 18.25, 9.75, 10.25),
+                    (5.75, 16.25, 11.75, 12.25),
+                ] {
+                    self.walls.push(Wall { min_x: x0, max_x: x1, min_y: y0, max_y: y1, height: CEILING_Z });
+                }
             }
             1 => {
-                self.room_min_x = -3.45;
-                self.room_max_x = 3.45;
-                self.room_min_y = -3.45;
-                self.room_max_y = 3.45;
+                self.room_min_x = -12.0;
+                self.room_max_x = 12.0;
+                self.room_min_y = -12.0;
+                self.room_max_y = 12.0;
                 self.pose_x = 0.35;
                 self.pose_y = 0.0;
                 self.pose_z = 1.5;
@@ -248,7 +331,7 @@ impl Sim {
                 self.room_max_x = 24.0;
                 self.room_min_y = -9.0;
                 self.room_max_y = 12.0;
-                self.walls.push(Wall { min_x: 1.55, max_x: 2.15, min_y: -2.2, max_y: 0.45 });
+                self.walls.push(Wall { min_x: 1.55, max_x: 2.15, min_y: -2.2, max_y: 0.45, height: CEILING_Z });
                 self.foods.push(still_obj(4.2, 1.8, 1.0, 0.45));
             }
             3 => {
@@ -258,6 +341,37 @@ impl Sim {
                 self.room_max_y = 12.0;
                 self.landings.clear();
                 self.landings.push(still_obj(0.15, 0.0, 0.12, 0.7));
+            }
+            4 => {
+                self.room_min_x = -24.0;
+                self.room_max_x = 24.0;
+                self.room_min_y = -24.0;
+                self.room_max_y = 24.0;
+            }
+            5 => {
+                self.room_min_x = -16.0;
+                self.room_max_x = 16.0;
+                self.room_min_y = -14.0;
+                self.room_max_y = 14.0;
+                self.pose_x = 0.0;
+                self.pose_y = -2.0;
+                self.pose_z = 1.2;
+                self.pose_yaw = 0.5;
+                self.foods.push(still_obj(8.0, 6.0, 1.0, 0.45));
+                self.foods.push(still_obj(-7.0, 5.0, 1.0, 0.45));
+                self.threats.push(still_obj(-1.2, -0.4, 0.45, 0.4));
+                self.predator_speed = PREDATOR_SPEED;
+                self.landings.push(still_obj(10.0, -8.0, 0.12, 0.7));
+                for (min_x, max_x, min_y, max_y) in [
+                    (4.0, 5.0, -2.0, 4.0),
+                    (-6.0, -2.0, 3.0, 4.0),
+                    (2.0, 7.0, 8.0, 9.0),
+                    (-10.0, -9.0, -6.0, -1.0),
+                    (-4.0, 1.0, -8.0, -7.0),
+                    (9.0, 10.0, 1.0, 6.0),
+                ] {
+                    self.walls.push(Wall { min_x, max_x, min_y, max_y, height: HALF_Z });
+                }
             }
             _ => {
                 self.room_min_x = -24.0;
@@ -302,7 +416,7 @@ impl Sim {
         if n_foods > MAX_FOODS || n_threats > MAX_THREATS || n_lands > MAX_PADS || n_walls > MAX_WALLS {
             return 2;
         }
-        let need = 88 + (n_foods + n_threats + n_lands) * 32 + n_walls * 32;
+        let need = 88 + (n_foods + n_threats + n_lands) * 32 + n_walls * 40;
         if bytes.len() < need {
             return 1;
         }
@@ -324,10 +438,14 @@ impl Sim {
             let max_x = read_f64(bytes, &mut cursor);
             let min_y = read_f64(bytes, &mut cursor);
             let max_y = read_f64(bytes, &mut cursor);
+            let mut height = read_f64(bytes, &mut cursor);
             if max_x <= min_x || max_y <= min_y {
                 return 4;
             }
-            walls.push(Wall { min_x, max_x, min_y, max_y });
+            if height <= 0.0 {
+                height = HALF_Z;
+            }
+            walls.push(Wall { min_x, max_x, min_y, max_y, height });
         }
         let inside = |x: f64, y: f64| room_min_x <= x && x <= room_max_x && room_min_y <= y && y <= room_max_y;
         if !inside(pose_x, pose_y) {
@@ -364,7 +482,12 @@ impl Sim {
     }
 
     fn step(&mut self) {
+        if self.downed {
+            self.write_snap(None);
+            return;
+        }
         self.advance_predators();
+        self.scent_ensure();
         let drive = self.encode_sensors();
         let stage = self.step_network(&drive);
         let mut rates = self.motor_rates();
@@ -378,6 +501,7 @@ impl Sim {
         self.apply_motors(rates);
         self.resolve_solids();
         self.try_eat();
+        self.try_catch();
         self.ticks += 1;
         self.write_snap(Some(stage));
     }
@@ -447,7 +571,7 @@ impl Sim {
     }
 
     fn advance_predators(&mut self) {
-        if self.predator_speed <= 0.0 {
+        if self.downed || self.predator_speed <= 0.0 {
             return;
         }
         let pose_x = self.pose_x;
@@ -460,7 +584,13 @@ impl Sim {
             let dy = pose_y - threat.y;
             let dz = pose_z - threat.z;
             let dist = speed_of(dx, dy, dz);
-            let closing = if dist <= 0.28 { 0.0 } else { 1.0f64.min((dist - 0.28) / 0.35) };
+            let closing = if dist <= 0.45 {
+                0.0
+            } else if dist <= CHASE_RANGE {
+                1.0
+            } else {
+                0.35
+            };
             if dist > 1e-8 && closing > 0.0 {
                 let accel = max_speed * (1.0 - PREDATOR_DRAG) * closing;
                 threat.vx = threat.vx * PREDATOR_DRAG + (dx / dist) * accel;
@@ -488,12 +618,142 @@ impl Sim {
         }
     }
 
+    fn scent_targets(&self) -> Vec<Obj> {
+        if !self.foods.is_empty() {
+            self.foods.clone()
+        } else {
+            self.landings.iter().copied().filter(|pad| self.inside_xy(pad.x, pad.y)).collect()
+        }
+    }
+
+    fn scent_ensure(&mut self) {
+        let targets = self.scent_targets();
+        let mut key = vec![self.room_min_x, self.room_max_x, self.room_min_y, self.room_max_y, targets.len() as f64];
+        for target in &targets {
+            key.push(target.x);
+            key.push(target.y);
+        }
+        for wall in &self.walls {
+            key.push(wall.min_x);
+            key.push(wall.max_x);
+            key.push(wall.min_y);
+            key.push(wall.max_y);
+        }
+        if key == self.scent_key {
+            return;
+        }
+        let cols = (((self.room_max_x - self.room_min_x) / SCENT_CELL).ceil() as usize).max(1);
+        let rows = (((self.room_max_y - self.room_min_y) / SCENT_CELL).ceil() as usize).max(1);
+        let mut blocked = vec![false; cols * rows];
+        for iy in 0..rows {
+            let cy = self.room_min_y + (iy as f64 + 0.5) * SCENT_CELL;
+            for ix in 0..cols {
+                let cx = self.room_min_x + (ix as f64 + 0.5) * SCENT_CELL;
+                for wall in &self.walls {
+                    if wall.min_x - BODY < cx && cx < wall.max_x + BODY && wall.min_y - BODY < cy && cy < wall.max_y + BODY {
+                        blocked[iy * cols + ix] = true;
+                        break;
+                    }
+                }
+            }
+        }
+        let inf = 1e18;
+        let mut dist = vec![inf; cols * rows];
+        for target in &targets {
+            let ix = (((target.x - self.room_min_x) / SCENT_CELL) as i64).clamp(0, cols as i64 - 1) as usize;
+            let iy = (((target.y - self.room_min_y) / SCENT_CELL) as i64).clamp(0, rows as i64 - 1) as usize;
+            blocked[iy * cols + ix] = false;
+            dist[iy * cols + ix] = 0.0;
+        }
+        let forward: [(i64, i64, f64); 4] = [(-1, -1, DIAG), (0, -1, 1.0), (1, -1, DIAG), (-1, 0, 1.0)];
+        let backward: [(i64, i64, f64); 4] = [(1, 1, DIAG), (0, 1, 1.0), (-1, 1, DIAG), (1, 0, 1.0)];
+        if !targets.is_empty() {
+            for _ in 0..200 {
+                let mut changed = false;
+                for iy in 0..rows {
+                    for ix in 0..cols {
+                        changed |= scent_relax(cols, rows, &blocked, &mut dist, ix, iy, &forward);
+                    }
+                }
+                for iy in (0..rows).rev() {
+                    for ix in (0..cols).rev() {
+                        changed |= scent_relax(cols, rows, &blocked, &mut dist, ix, iy, &backward);
+                    }
+                }
+                if !changed {
+                    break;
+                }
+            }
+        }
+        self.scent_key = key;
+        self.scent_cols = cols;
+        self.scent_rows = rows;
+        self.scent_blocked = blocked;
+        self.scent_dist = dist;
+    }
+
+    fn scent_direction(&self) -> Option<(f64, f64)> {
+        let cols = self.scent_cols;
+        let rows = self.scent_rows;
+        if cols == 0 || rows == 0 {
+            return None;
+        }
+        let ix = (((self.pose_x - self.room_min_x) / SCENT_CELL) as i64).clamp(0, cols as i64 - 1);
+        let iy = (((self.pose_y - self.room_min_y) / SCENT_CELL) as i64).clamp(0, rows as i64 - 1);
+        let at = |x: i64, y: i64| (y as usize) * cols + x as usize;
+        let here = self.scent_dist[at(ix, iy)];
+        if here >= 1e17 || self.scent_blocked[at(ix, iy)] {
+            return None;
+        }
+        let mut gx = 0.0;
+        let mut gy = 0.0;
+        let steps: [(i64, i64, f64); 8] = [
+            (-1, -1, DIAG),
+            (0, -1, 1.0),
+            (1, -1, DIAG),
+            (-1, 0, 1.0),
+            (1, 0, 1.0),
+            (-1, 1, DIAG),
+            (0, 1, 1.0),
+            (1, 1, DIAG),
+        ];
+        for (dx, dy, length) in steps {
+            let nx = ix + dx;
+            let ny = iy + dy;
+            if nx < 0 || ny < 0 || nx >= cols as i64 || ny >= rows as i64 {
+                continue;
+            }
+            let there = self.scent_dist[at(nx, ny)];
+            if there >= 1e17 || self.scent_blocked[at(nx, ny)] {
+                continue;
+            }
+            if dx != 0 && dy != 0 && (self.scent_blocked[at(nx, iy)] || self.scent_blocked[at(ix, ny)]) {
+                continue;
+            }
+            let gain = (here - there) / length;
+            gx += gain * dx as f64;
+            gy += gain * dy as f64;
+        }
+        if gx.hypot(gy) < 1e-9 {
+            return None;
+        }
+        Some((gy.atan2(gx), here * SCENT_CELL))
+    }
+
     fn encode_sensors(&self) -> [f32; N] {
         let mut drive = [0.0f32; N];
-        if let Some((food, dist)) = nearest(&self.foods, self.pose_x, self.pose_y) {
-            let food_dist = dist.max(0.001);
-            let food_angle = angle_delta((food.y - self.pose_y).atan2(food.x - self.pose_x), self.pose_yaw);
-            let odor = (-food_dist / 3.2).exp();
+        let targets = self.scent_targets();
+        if !targets.is_empty() {
+            let (heading, travel) = match self.scent_direction() {
+                Some(found) => found,
+                None => {
+                    let (near, dist) = nearest(&targets, self.pose_x, self.pose_y).unwrap();
+                    ((near.y - self.pose_y).atan2(near.x - self.pose_x), dist)
+                }
+            };
+            let food_dist = travel.max(0.001);
+            let food_angle = angle_delta(heading, self.pose_yaw);
+            let odor = (-food_dist / SCENT_LENGTH).exp();
             let forward = odor * food_angle.cos().max(0.0);
             let left = odor * food_angle.sin().max(0.0);
             let right = odor * (-food_angle.sin()).max(0.0);
@@ -520,11 +780,18 @@ impl Sim {
                 drive[slot] = value;
             }
         }
-        if let Some((_, dist)) = nearest_volume(&self.threats, self.pose_x, self.pose_y, self.pose_z) {
+        if let Some((threat, dist)) = nearest_volume(&self.threats, self.pose_x, self.pose_y, self.pose_z) {
             if dist < LOOM_RANGE {
-                let value = ((LOOM_RANGE - dist) / LOOM_RANGE) as f32;
-                for slot in 88..96 {
-                    drive[slot] = value;
+                let strength = (LOOM_RANGE - dist) / LOOM_RANGE;
+                let bearing = angle_delta((threat.y - self.pose_y).atan2(threat.x - self.pose_x), self.pose_yaw);
+                drive[88 + loom_bin_index(bearing)] = strength as f32;
+                let horiz = (threat.x - self.pose_x).hypot(threat.y - self.pose_y).max(1e-8);
+                let below = strength * (-(threat.z - self.pose_z).atan2(horiz).sin()).max(0.0);
+                if below > 0.0 {
+                    let boosted = (below * 1.4) as f32;
+                    // pitch_up pair from motor_span("pitch_up") at n = 256.
+                    drive[238] = drive[238].max(boosted);
+                    drive[239] = drive[239].max(boosted);
                 }
             }
         }
@@ -534,6 +801,9 @@ impl Sim {
             let dy = ray_angle.sin();
             let mut dist = ray_room(self.pose_x, self.pose_y, dx, dy, self.room_min_x, self.room_max_x, self.room_min_y, self.room_max_y);
             for wall in &self.walls {
+                if !occludes(wall, self.pose_z) {
+                    continue;
+                }
                 if let Some(hit) = ray_box(self.pose_x, self.pose_y, dx, dy, wall) {
                     dist = dist.min(hit);
                 }
@@ -547,7 +817,7 @@ impl Sim {
             let angle = angle_delta((pad.y - self.pose_y).atan2(pad.x - self.pose_x), self.pose_yaw);
             dist < 2.4 && angle.abs() < std::f64::consts::PI / 2.0
         });
-        let quiet = self.foods.is_empty()
+        let quiet = targets.is_empty()
             && !pad_near
             && nearest_volume(&self.threats, self.pose_x, self.pose_y, self.pose_z)
                 .map(|(_, dist)| dist >= LOOM_RANGE)
@@ -561,6 +831,83 @@ impl Sim {
             }
         }
         drive
+    }
+
+    fn heading_clearance(&self, angle: f64) -> f64 {
+        let dx = angle.cos();
+        let dy = angle.sin();
+        let mut dist = ray_room(
+            self.pose_x,
+            self.pose_y,
+            dx,
+            dy,
+            self.room_min_x,
+            self.room_max_x,
+            self.room_min_y,
+            self.room_max_y,
+        );
+        for wall in &self.walls {
+            if !occludes(wall, self.pose_z) {
+                continue;
+            }
+            if let Some(hit) = ray_box(self.pose_x, self.pose_y, dx, dy, wall) {
+                dist = dist.min(hit);
+            }
+        }
+        dist
+    }
+
+    fn half_hedge_ahead(&self) -> f64 {
+        let dx = self.pose_yaw.cos();
+        let dy = self.pose_yaw.sin();
+        let mut top = 0.0f64;
+        for wall in &self.walls {
+            if wall.height >= CEILING_Z - 0.3 {
+                continue;
+            }
+            if let Some(hit) = ray_box(self.pose_x, self.pose_y, dx, dy, wall) {
+                if hit < 1.8 && self.pose_z < wall.height + 0.35 {
+                    top = top.max(wall.height);
+                }
+            }
+        }
+        top
+    }
+
+    fn altitude_gap(&self) -> (f64, bool) {
+        let mut target = 0.95;
+        let mut hunter_below = false;
+        if let Some((threat, dist)) = nearest_volume(&self.threats, self.pose_x, self.pose_y, self.pose_z) {
+            if dist < LOOM_RANGE {
+                let closeness = 1.0 - dist / LOOM_RANGE;
+                target = 0.72 + closeness * 1.25;
+                hunter_below = threat.z < self.pose_z;
+            }
+        }
+        let ahead_top = self.half_hedge_ahead();
+        if ahead_top > 0.0 {
+            target = target.max(ahead_top + 0.5);
+        }
+        target = target.clamp(0.7, 2.05);
+        (target - self.pose_z, hunter_below)
+    }
+
+    fn wall_avoid(&self) -> (f64, f64, f64) {
+        let ahead = self.heading_clearance(self.pose_yaw);
+        if ahead >= 2.6 {
+            return (0.0, ahead, 0.0);
+        }
+        let left = self.heading_clearance(self.pose_yaw + 0.7);
+        let right = self.heading_clearance(self.pose_yaw - 0.7);
+        let side = if left > right + 0.05 {
+            1.0
+        } else if right > left + 0.05 {
+            -1.0
+        } else {
+            1.0
+        };
+        let urgency = (2.6 - ahead) / 2.6;
+        ((0.22 + 0.75 * urgency).copysign(side), ahead, side)
     }
 
     fn apply_motors(&mut self, rates: [f32; MOTOR_COUNT]) {
@@ -580,52 +927,182 @@ impl Sim {
         } else if self.escape_hold > 0 {
             self.escape_hold -= 1;
         }
+        if land >= 0.5 {
+            self.landing_hold = 8;
+        } else if self.landing_hold > 0 {
+            self.landing_hold -= 1;
+        }
         let fleeing = escape >= 0.5 || self.escape_hold > 0;
-        let yaw_cmd = if fleeing { 0.16 } else { 0.28 * (yaw_left - yaw_right) };
+        if fleeing {
+            self.landing_hold = 0;
+        }
+        let landing = !fleeing && (land >= 0.5 || self.landing_hold > 0);
+        let steer = yaw_left - yaw_right;
+        if steer.abs() >= 0.5 {
+            self.yaw_latch = 1.1_f64.copysign(steer);
+            self.yaw_latch_age = 0;
+        } else if self.yaw_latch != 0.0 {
+            self.yaw_latch_age += 1;
+            if self.yaw_latch_age > 2 {
+                self.yaw_latch = 0.0;
+            }
+        }
+        let yaw_cmd = if fleeing {
+            if self.pose_vx.hypot(self.pose_vy) > 0.05 {
+                self.escape_moved = true;
+            }
+            if self.saccade_cool > 0 {
+                self.saccade_cool -= 1;
+                0.06 * steer
+            } else if steer.abs() >= 0.5 {
+                self.saccade_cool = 7;
+                1.1_f64.copysign(steer)
+            } else if self.yaw_latch != 0.0 {
+                let latched = self.yaw_latch;
+                self.yaw_latch = 0.0;
+                self.saccade_cool = 7;
+                latched
+            } else if self.escape_moved && self.pose_vx.hypot(self.pose_vy) < 0.02 {
+                let away = match nearest_volume(&self.threats, self.pose_x, self.pose_y, self.pose_z) {
+                    Some((threat, _)) => {
+                        let bearing = angle_delta((threat.y - self.pose_y).atan2(threat.x - self.pose_x), self.pose_yaw);
+                        let signed = -bearing.sin();
+                        if signed.abs() > 0.2 { signed } else { 1.0 }
+                    }
+                    None => 1.0,
+                };
+                self.saccade_cool = 7;
+                1.1_f64.copysign(away)
+            } else {
+                0.06 * steer
+            }
+        } else {
+            self.saccade_cool = 0;
+            self.escape_moved = false;
+            self.jump_ticks = 0;
+            0.28 * steer
+        };
+        let (avoid, ahead, open_side) = self.wall_avoid();
+        let yaw_cmd = if ahead < 0.55 {
+            avoid
+        } else if ahead < 1.2 {
+            0.55 * yaw_cmd + avoid
+        } else {
+            yaw_cmd
+        };
         self.yaw_rate = self.yaw_rate * 0.75 + yaw_cmd * 0.25;
         self.pose_yaw += self.yaw_rate;
         let walking = !fleeing && walk >= 0.5 && walk > thrust;
         let settling = !fleeing && land < 0.5 && gesture >= 0.5 && gesture > thrust && gesture > walk;
-        let threat_far = nearest_volume(&self.threats, self.pose_x, self.pose_y, self.pose_z)
-            .map(|(_, dist)| dist >= LOOM_RANGE)
-            .unwrap_or(true);
-        let body_idle = self.foods.is_empty() && threat_far && !fleeing && land < 0.5 && thrust < 0.5 && walk < 0.5;
-        let (forward, lift) = if fleeing {
-            self.pose_pitch = 0.82 * self.pose_pitch + 0.18 * 0.65;
-            (0.03, 0.018)
+        let pad_goal = self.foods.is_empty()
+            && self.threats.is_empty()
+            && self.landings.iter().any(|pad| self.inside_xy(pad.x, pad.y));
+        let body_idle = self.foods.is_empty()
+            && self.threats.is_empty()
+            && !pad_goal
+            && !fleeing
+            && land < 0.5
+            && thrust < 0.5
+            && walk < 0.5;
+        self.climb_bias = 0.85 * self.climb_bias + 0.15 * pitch_up;
+        let (gap, hunter_below) = self.altitude_gap();
+        let mut attitude = (gap * 1.6).clamp(-0.45, 0.55);
+        if hunter_below {
+            attitude += 0.06 * self.climb_bias;
+        }
+        attitude = attitude.clamp(-0.45, 0.55);
+        self.pose_pitch = 0.8 * self.pose_pitch + 0.2 * (attitude - 0.45 * land);
+        let mut forward = if fleeing {
+            0.034
         } else if body_idle {
-            let landed = self.pose_z <= FLOOR_Z + 0.05;
-            self.pose_pitch = 0.82 * self.pose_pitch + if landed { 0.0 } else { 0.18 * -0.4 };
-            (0.0, if landed { 0.0 } else { -0.03 })
+            0.0
         } else if walking {
-            self.pose_pitch = 0.82 * self.pose_pitch + 0.18 * (pitch_up - land);
-            (0.012, if self.pose_z > FLOOR_Z + 0.28 { -0.016 } else { 0.0 })
+            0.012
         } else if settling {
-            let landed = self.pose_z <= FLOOR_Z + 0.05;
-            self.pose_pitch = 0.82 * self.pose_pitch + if landed { 0.0 } else { 0.18 * -0.4 };
-            (0.0, if landed { 0.0 } else { -0.03 })
+            0.0
+        } else if landing && pad_goal {
+            0.0
         } else {
-            self.pose_pitch = 0.82 * self.pose_pitch + 0.18 * (pitch_up - land);
-            (0.0192 * thrust, 0.012 * self.pose_pitch - if land >= 0.5 { 0.02 } else { 0.0 })
+            0.0192 * thrust
         };
-        let drag = if body_idle || settling { FLY_DRAG * 0.62 } else { FLY_DRAG };
+        let cruising = !self.threats.is_empty() && !body_idle && !settling && !landing;
+        if cruising {
+            forward = forward.max(0.016);
+        }
+        if ahead < 1.4 && forward > 0.0 {
+            let capped = if cruising {
+                ((ahead - 0.35) * 0.04).max(0.016)
+            } else {
+                ((ahead - 0.5) * 0.05).max(0.0)
+            };
+            forward = forward.min(capped);
+        }
+        let lift = if landing {
+            hover_lift(self.pose_z, true)
+        } else {
+            pitched_lift(self.pose_vz, self.pose_pitch, forward, gap)
+        };
+        let drag = if settling { FLY_DRAG * 0.62 } else { FLY_DRAG };
         self.pose_vx = self.pose_vx * drag + self.pose_yaw.cos() * forward;
         self.pose_vy = self.pose_vy * drag + self.pose_yaw.sin() * forward;
         self.pose_vz = self.pose_vz * drag + lift;
-        let (vx, vy, vz, speed) = limit_velocity(self.pose_vx, self.pose_vy, self.pose_vz, MAX_FLY_SPEED);
+        let (vx, vy, vz, _) = limit_velocity(self.pose_vx, self.pose_vy, self.pose_vz, MAX_FLY_SPEED);
         self.pose_vx = vx;
         self.pose_vy = vy;
         self.pose_vz = vz;
-        self.pose_speed = speed;
+        self.bleed_walls();
+        if ahead < 1.2
+            && open_side != 0.0
+            && cruising
+            && self.pose_vx.hypot(self.pose_vy) < 0.03
+        {
+            let heading = self.pose_yaw + open_side * 1.1;
+            self.pose_vx += heading.cos() * 0.016;
+            self.pose_vy += heading.sin() * 0.016;
+        }
+        self.pose_speed = speed_of(self.pose_vx, self.pose_vy, self.pose_vz);
         self.pose_x += self.pose_vx;
         self.pose_y += self.pose_vy;
         self.pose_z += self.pose_vz;
     }
 
+    fn bleed_walls(&mut self) {
+        bleed_face(&mut self.pose_vx, &mut self.pose_vy, self.pose_x - self.room_min_x - BODY, 1.0, 0.0);
+        bleed_face(&mut self.pose_vx, &mut self.pose_vy, self.room_max_x - BODY - self.pose_x, -1.0, 0.0);
+        bleed_face(&mut self.pose_vx, &mut self.pose_vy, self.pose_y - self.room_min_y - BODY, 0.0, 1.0);
+        bleed_face(&mut self.pose_vx, &mut self.pose_vy, self.room_max_y - BODY - self.pose_y, 0.0, -1.0);
+        let walls = self.walls.clone();
+        for wall in walls {
+            if !occludes(&wall, self.pose_z) {
+                continue;
+            }
+            let min_x = wall.min_x - BODY;
+            let max_x = wall.max_x + BODY;
+            let min_y = wall.min_y - BODY;
+            let max_y = wall.max_y + BODY;
+            if self.pose_y >= min_y && self.pose_y <= max_y {
+                if self.pose_x <= min_x {
+                    bleed_face(&mut self.pose_vx, &mut self.pose_vy, min_x - self.pose_x, -1.0, 0.0);
+                } else if self.pose_x >= max_x {
+                    bleed_face(&mut self.pose_vx, &mut self.pose_vy, self.pose_x - max_x, 1.0, 0.0);
+                }
+            }
+            if self.pose_x >= min_x && self.pose_x <= max_x {
+                if self.pose_y <= min_y {
+                    bleed_face(&mut self.pose_vx, &mut self.pose_vy, min_y - self.pose_y, 0.0, -1.0);
+                } else if self.pose_y >= max_y {
+                    bleed_face(&mut self.pose_vx, &mut self.pose_vy, self.pose_y - max_y, 0.0, 1.0);
+                }
+            }
+        }
+    }
+
     fn resolve_solids(&mut self) {
         for index in 0..self.walls.len() {
             let wall = self.walls[index];
-            push_out(self, &wall);
+            if occludes(&wall, self.pose_z) {
+                push_out(self, &wall);
+            }
         }
         let room = (self.room_min_x, self.room_max_x, self.room_min_y, self.room_max_y);
         let (x, y, z, vx, vy, vz) = contain(self.pose_x, self.pose_y, self.pose_z, self.pose_vx, self.pose_vy, self.pose_vz, room, BODY, 0.0);
@@ -638,8 +1115,70 @@ impl Sim {
         self.pose_speed = speed_of(vx, vy, vz);
     }
 
+    fn try_catch(&mut self) {
+        if self.spawn_shield > 0 {
+            self.spawn_shield -= 1;
+            return;
+        }
+        if self.downed {
+            return;
+        }
+        let pose_x = self.pose_x;
+        let pose_y = self.pose_y;
+        let pose_z = self.pose_z;
+        let caught = self.threats.iter().any(|threat| {
+            let dist = speed_of(pose_x - threat.x, pose_y - threat.y, pose_z - threat.z);
+            dist <= threat.r + 0.22
+        });
+        if !caught {
+            return;
+        }
+        self.pose_vx = 0.0;
+        self.pose_vy = 0.0;
+        self.pose_vz = 0.0;
+        self.yaw_rate = 0.0;
+        self.pose_speed = 0.0;
+        self.landing_hold = 0;
+        self.downed = true;
+    }
+
+    fn respawn(&mut self) {
+        let pads: Vec<Obj> = self.landings.iter().copied().filter(|pad| self.inside_xy(pad.x, pad.y)).collect();
+        if pads.is_empty() {
+            self.pose_x = self.start_pose[0];
+            self.pose_y = self.start_pose[1];
+            self.pose_z = self.start_pose[2];
+            self.pose_yaw = self.start_pose[3];
+        } else {
+            self.rng = self.rng.wrapping_mul(1664525).wrapping_add(1013904223);
+            let pad = pads[(self.rng as usize) % pads.len()];
+            let span = 0xFFFFFFu32 as f64;
+            self.pose_yaw = ((self.rng >> 8) as f64 / span) * std::f64::consts::PI * 2.0 - std::f64::consts::PI;
+            self.pose_x = pad.x;
+            self.pose_y = pad.y;
+            self.pose_z = 1.15;
+        }
+        self.pose_pitch = 0.0;
+        self.pose_vx = 0.0;
+        self.pose_vy = 0.0;
+        self.pose_vz = 0.0;
+        self.yaw_rate = 0.0;
+        self.pose_speed = 0.0;
+        self.downed = false;
+        self.landing_hold = 0;
+        self.escape_hold = 0;
+        self.saccade_cool = 0;
+        self.escape_moved = false;
+        self.yaw_latch = 0.0;
+        self.yaw_latch_age = 0;
+        self.climb_bias = 0.0;
+        self.jump_ticks = 0;
+        self.spawn_shield = 30;
+        self.write_snap(None);
+    }
+
     fn try_eat(&mut self) {
-        if self.eaten || self.foods.is_empty() {
+        if self.downed || self.eaten || self.foods.is_empty() {
             return;
         }
         self.foods.retain(|food| (food.x - self.pose_x).hypot(food.y - self.pose_y) > food.r + 0.08);
@@ -678,6 +1217,7 @@ impl Sim {
             write_f64(&mut self.layout, &mut cursor, wall.max_x);
             write_f64(&mut self.layout, &mut cursor, wall.min_y);
             write_f64(&mut self.layout, &mut cursor, wall.max_y);
+            write_f64(&mut self.layout, &mut cursor, wall.height);
         }
     }
 
@@ -728,7 +1268,7 @@ impl Sim {
             write_f32(&mut self.snap, &mut cursor, value);
         }
         write_u32(&mut self.snap, &mut cursor, stage.nonzero);
-        write_u32(&mut self.snap, &mut cursor, 0);
+        write_u32(&mut self.snap, &mut cursor, u32::from(self.downed));
         for value in stage.held {
             write_f32(&mut self.snap, &mut cursor, value);
         }
@@ -801,6 +1341,34 @@ impl Clone for Obj {
 
 impl Copy for Obj {}
 
+fn scent_relax(cols: usize, rows: usize, blocked: &[bool], dist: &mut [f64], ix: usize, iy: usize, steps: &[(i64, i64, f64)]) -> bool {
+    let here = iy * cols + ix;
+    if blocked[here] {
+        return false;
+    }
+    let mut changed = false;
+    for &(dx, dy, cost) in steps {
+        let nx = ix as i64 + dx;
+        let ny = iy as i64 + dy;
+        if nx < 0 || ny < 0 || nx >= cols as i64 || ny >= rows as i64 {
+            continue;
+        }
+        let there = ny as usize * cols + nx as usize;
+        if blocked[there] {
+            continue;
+        }
+        if dx != 0 && dy != 0 && (blocked[iy * cols + nx as usize] || blocked[ny as usize * cols + ix]) {
+            continue;
+        }
+        let candidate = dist[there] + cost;
+        if candidate < dist[here] {
+            dist[here] = candidate;
+            changed = true;
+        }
+    }
+    changed
+}
+
 fn nearest(items: &[Obj], x: f64, y: f64) -> Option<(&Obj, f64)> {
     let mut best: Option<(&Obj, f64)> = None;
     for item in items {
@@ -810,6 +1378,12 @@ fn nearest(items: &[Obj], x: f64, y: f64) -> Option<(&Obj, f64)> {
         }
     }
     best
+}
+
+fn loom_bin_index(bearing: f64) -> usize {
+    let pi = std::f64::consts::PI;
+    let sector = (bearing + pi) / (2.0 * pi) * 8.0;
+    (sector.floor() as i32).rem_euclid(8) as usize
 }
 
 fn angle_delta(target: f64, current: f64) -> f64 {
@@ -897,8 +1471,40 @@ fn push_out(sim: &mut Sim, wall: &Wall) {
     }
 }
 
+fn bleed_face(vx: &mut f64, vy: &mut f64, dist: f64, nx: f64, ny: f64) {
+    let pad = 1.25;
+    if dist >= pad {
+        return;
+    }
+    let closing = -(*vx * nx + *vy * ny);
+    if closing <= 0.0 {
+        return;
+    }
+    let keep = (dist / pad).max(0.0);
+    *vx += closing * (1.0 - keep) * nx;
+    *vy += closing * (1.0 - keep) * ny;
+}
+
 fn speed_of(vx: f64, vy: f64, vz: f64) -> f64 {
     vx.hypot(vy).hypot(vz)
+}
+
+fn occludes(wall: &Wall, z: f64) -> bool {
+    z < wall.height + 0.2
+}
+
+fn pitched_lift(vz: f64, pitch: f64, forward: f64, gap: f64) -> f64 {
+    let hold = -0.22 * vz;
+    let climb = pitch.sin() * forward.max(0.0) + 0.045 * gap.clamp(-1.2, 1.2);
+    (hold + climb).clamp(-0.04, 0.05)
+}
+
+fn hover_lift(z: f64, landing: bool) -> f64 {
+    if landing {
+        if z <= FLOOR_Z + 0.05 { 0.0 } else { -0.045 }
+    } else {
+        0.0
+    }
 }
 
 fn limit_velocity(vx: f64, vy: f64, vz: f64, limit: f64) -> (f64, f64, f64, f64) {
@@ -1024,7 +1630,7 @@ fn write_obj(buf: &mut [u8], cursor: &mut usize, item: &Obj) {
     write_f64(buf, cursor, item.r);
 }
 
-static mut LAYOUT_IN: [u8; 2048] = [0; 2048];
+static mut LAYOUT_IN: [u8; LAYOUT_LEN] = [0; LAYOUT_LEN];
 
 #[no_mangle]
 pub extern "C" fn snapshot_ptr() -> *const u8 {
@@ -1053,7 +1659,7 @@ pub extern "C" fn layout_buffer() -> *mut u8 {
 
 #[no_mangle]
 pub extern "C" fn layout_buffer_cap() -> u32 {
-    2048
+    LAYOUT_LEN as u32
 }
 
 #[no_mangle]
@@ -1065,7 +1671,7 @@ pub extern "C" fn reset(scenario: u32) -> i32 {
 #[no_mangle]
 pub extern "C" fn set_layout(len: u32) -> i32 {
     let len = len as usize;
-    if len > 2048 {
+    if len > LAYOUT_LEN {
         return 1;
     }
     let bytes = unsafe { &LAYOUT_IN[..len] }.to_vec();
@@ -1080,4 +1686,9 @@ pub extern "C" fn set_hold(action: i32) {
 #[no_mangle]
 pub extern "C" fn step() {
     with_sim(|sim| sim.step());
+}
+
+#[no_mangle]
+pub extern "C" fn respawn() {
+    with_sim(|sim| sim.respawn());
 }

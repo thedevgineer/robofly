@@ -6,7 +6,7 @@ from pathlib import Path
 from time import time
 
 from .network import SpikingNetwork
-from .topology import build_default_topology
+from .topology import MOTOR_NAMES, build_default_topology
 from .world import (
     advance_predator,
     apply_motors,
@@ -15,6 +15,7 @@ from .world import (
     layout_from_world,
     make_world,
     resolve_solids,
+    try_catch,
     try_eat,
     world_from_layout,
 )
@@ -43,6 +44,22 @@ def run_simulation(
     }
     with trace_path.open("w", encoding="utf-8") as fh:
         for step in range(int(steps)):
+            if world.downed:
+                frame = {
+                    "step": step,
+                    "pose": asdict(world.pose),
+                    "command": {"thrust": 0.0, "yaw": 0.0, "pitch": 0.0, "land": False, "escape": False},
+                    "spikes": [],
+                    "motor_rates": {name: 0.0 for name in MOTOR_NAMES},
+                    "population_rates": {},
+                    "cycles": 0,
+                    "drive_nonzero": 0,
+                    "driven": [],
+                    "voltage_sample": [0.0] * 32,
+                    **frame_actors(world),
+                }
+                fh.write(json.dumps(frame, separators=(",", ":")) + "\n")
+                continue
             advance_predator(world)
             drive = encode_sensors(world, topology.n)
             brain = network.step(drive)
@@ -50,6 +67,7 @@ def run_simulation(
             command = apply_motors(world, brain.motor_rates)
             resolve_solids(world)
             try_eat(world)
+            try_catch(world)
             frame = {
                 "step": step,
                 "pose": asdict(world.pose),
