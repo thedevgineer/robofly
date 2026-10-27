@@ -3,6 +3,7 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as THREE from "three";
 import type { NeuronStage } from "./live";
+import { releaseSpring, resist, stopAll } from "./orbitMotion";
 import { MOTOR_GROUP, MOTOR_NAMES, neuronKind, type ChipGraph } from "./types";
 
 export const pointerState = { panned: false };
@@ -303,8 +304,11 @@ function OrbitView({
   }, [apply, size.height, size.width]);
 
   // Keep spherical coords in sync when the viewcube tweens the camera.
+  const coast = useRef<ReturnType<typeof releaseSpring>[]>([]);
+  const coasting = useRef(false);
+
   useFrame(() => {
-    if (compact || dragging.current) return;
+    if (compact || dragging.current || coasting.current) return;
     scratch.offset.copy(camera.position).sub(target.current);
     const r = scratch.offset.length();
     if (r < 0.2) return;
@@ -334,14 +338,28 @@ function OrbitView({
       apply();
     }
 
+    let lastX = 0;
+    let lastY = 0;
+    let lastT = 0;
+    let prevX = 0;
+    let prevY = 0;
+    let prevT = 0;
+
     function onDown(event: PointerEvent) {
       if (event.button !== 0) return;
+      stopAll(coast.current);
+      coast.current = [];
+      coasting.current = false;
       down = true;
       dragging.current = true;
       shift = event.shiftKey;
       pointerState.panned = false;
       startX = event.clientX;
       startY = event.clientY;
+      const now = performance.now();
+      lastX = prevX = event.clientX;
+      lastY = prevY = event.clientY;
+      lastT = prevT = now;
       originTheta = theta.current;
       originPhi = phi.current;
       originTarget.copy(target.current);
@@ -371,20 +389,53 @@ function OrbitView({
       } else {
         if (compact) {
           theta.current = THREE.MathUtils.clamp(originTheta - dx * 0.003, homeTheta - 0.35, homeTheta + 0.35);
-          phi.current = THREE.MathUtils.clamp(originPhi + dy * 0.0025, 0.92, 1.14);
+          phi.current = resist(originPhi + dy * 0.0025, 0.92, 1.14);
           radius.current = THREE.MathUtils.clamp(radius.current, COMPACT_RADIUS_MIN, COMPACT_RADIUS_MAX);
           target.current.copy(HOME_TARGET);
         } else {
           theta.current = originTheta - dx * 0.005;
-          phi.current = THREE.MathUtils.clamp(originPhi + dy * 0.004, 0.28, 1.48);
+          phi.current = resist(originPhi + dy * 0.004, 0.28, 1.48);
         }
       }
+      const now = performance.now();
+      prevX = lastX;
+      prevY = lastY;
+      prevT = lastT;
+      lastX = event.clientX;
+      lastY = event.clientY;
+      lastT = now;
       apply();
     }
 
     function onUp() {
+      const moved = pointerState.panned;
+      const panning = shift;
       down = false;
       dragging.current = false;
+      if (!moved || panning) return;
+      const dt = (lastT - prevT) / 1000;
+      const usable = dt > 0.001 && dt < 0.12;
+      const thetaGain = compact ? 0.003 : 0.005;
+      const phiGain = compact ? 0.0025 : 0.004;
+      const thetaV = usable ? (-(lastX - prevX) / dt) * thetaGain : 0;
+      const phiV = usable ? ((lastY - prevY) / dt) * phiGain : 0;
+      const phiMin = compact ? 0.92 : 0.28;
+      const phiMax = compact ? 1.14 : 1.48;
+      const thetaMin = compact ? homeTheta - 0.35 : null;
+      const thetaMax = compact ? homeTheta + 0.35 : null;
+      coasting.current = true;
+      const thetaAnim = releaseSpring(theta.current, thetaV, thetaMin, thetaMax, (value) => {
+        theta.current = value;
+        apply();
+      });
+      const phiAnim = releaseSpring(phi.current, phiV, phiMin, phiMax, (value) => {
+        phi.current = value;
+        apply();
+      });
+      coast.current = [thetaAnim, phiAnim];
+      void Promise.all([thetaAnim.finished, phiAnim.finished]).then(() => {
+        coasting.current = false;
+      });
     }
 
     if (!compact) el.addEventListener("wheel", onWheel, { passive: false });

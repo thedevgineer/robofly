@@ -1,35 +1,31 @@
+import type { ComponentType } from "react";
+import { Escape, EscapeRates, LoomRose, Pitch, Populations, Tick } from "./figures";
 import { arxivUrl, githubUrl } from "./links";
 import { SiteNav } from "./SiteNav";
 
-const FIGURES: { src: string; alt: string; caption: string }[] = [
+const FIGURES: { Figure: ComponentType; caption: string }[] = [
   {
-    src: "/paper/figures/chip.png",
-    alt: "One control tick through the chip",
+    Figure: Tick,
     caption: "One 50 ms tick. Sensory current enters 256 membranes. Spikes address the 670 stored weights on the next tick. Twelve motor pairs accumulate into the body plant.",
   },
   {
-    src: "/paper/figures/populations.png",
-    alt: "Layout of the 256-cell genome",
+    Figure: Populations,
     caption: "The 256-cell genome. Vision, odor, contact, and looming are the sensory populations. Twelve motor pairs occupy the last 24 cells.",
   },
   {
-    src: "/paper/figures/escape_chain.png",
-    alt: "Escape genome chain",
+    Figure: Escape,
     caption: "The escape genome. A loom bin drives LPLC2, LC4, the giant fiber, escape, and thrust through the PSI. LPLC2 also drives the yaw pair that turns away.",
   },
   {
-    src: "/paper/figures/loom_rose.png",
-    alt: "Eight body-frame looming bins",
+    Figure: LoomRose,
     caption: "Eight body-frame looming bins. Ahead is up and left is positive. Bins 0 and 7, behind the fly, use the weaker yaw weight.",
   },
   {
-    src: "/paper/figures/pitch_trace.png",
-    alt: "Pitch and height trace",
+    Figure: Pitch,
     caption: "Pitch and height on the yard, one point per 50 ms tick. The nose and the height fall, then rise, and the body holds the band above the hunter.",
   },
   {
-    src: "/paper/figures/escape_trace.png",
-    alt: "Motor rates during escape",
+    Figure: EscapeRates,
     caption: "Motor rates from the loom scene. Yaw right fires as the fly turns off the threat, then escape and thrust alternate for the dash.",
   },
 ];
@@ -73,10 +69,10 @@ export function Paper() {
             The figures below are from the preprint. The Playground is the same controller playing live — a custom room with flies, bees, and food, and the chip breakdown under the yard.
           </p>
           <div className="paper-figures">
-            {FIGURES.map((figure) => (
-              <figure className="paper-figure" key={figure.src}>
-                <img src={figure.src} alt={figure.alt} loading="lazy" />
-                <figcaption>{figure.caption}</figcaption>
+            {FIGURES.map(({ Figure, caption }) => (
+              <figure className="paper-figure" key={caption}>
+                <Figure />
+                <figcaption>{caption}</figcaption>
               </figure>
             ))}
           </div>

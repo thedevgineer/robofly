@@ -2,6 +2,7 @@ import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
 import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { releaseSpring, resist, stopAll } from "./orbitMotion";
 import { MOTOR_NAMES, type Barrier, type EditorTool, type Frame, type Landmark, type Layout, type Pose, type Room, type Scenario, type WorldPick } from "./types";
 
 function leadingAction(rates: Record<string, number>): string {
@@ -253,6 +254,8 @@ function OrbitInput({
   const drag = useRef(false);
   const armed = useRef(false);
   const start = useRef({ x: 0, y: 0 });
+  const coast = useRef<ReturnType<typeof releaseSpring>[]>([]);
+  const sample = useRef({ x: 0, y: 0, t: 0, px: 0, py: 0, pt: 0 });
   const keys = useRef({ left: false, right: false, up: false, down: false });
 
   useEffect(() => {
@@ -261,9 +264,13 @@ function OrbitInput({
       event.button === 1 || event.button === 2 || (event.button === 0 && primaryOrbit);
     const onDown = (event: PointerEvent) => {
       if (!isOrbitButton(event)) return;
+      stopAll(coast.current);
+      coast.current = [];
       armed.current = true;
       drag.current = event.button !== 0;
       start.current = { x: event.clientX, y: event.clientY };
+      const now = performance.now();
+      sample.current = { x: event.clientX, y: event.clientY, t: now, px: event.clientX, py: event.clientY, pt: now };
       if (event.button !== 0) event.preventDefault();
     };
     const onMove = (event: PointerEvent) => {
@@ -274,11 +281,33 @@ function OrbitInput({
         drag.current = true;
       }
       orbit.current.theta -= event.movementX * 0.005;
-      orbit.current.phi = THREE.MathUtils.clamp(orbit.current.phi + event.movementY * 0.004, 0.25, 1.45);
+      orbit.current.phi = resist(orbit.current.phi + event.movementY * 0.004, 0.25, 1.45);
+      const now = performance.now();
+      sample.current.px = sample.current.x;
+      sample.current.py = sample.current.y;
+      sample.current.pt = sample.current.t;
+      sample.current.x = event.clientX;
+      sample.current.y = event.clientY;
+      sample.current.t = now;
     };
     const onUp = () => {
+      const wasDrag = drag.current;
       armed.current = false;
       drag.current = false;
+      if (!wasDrag) return;
+      const s = sample.current;
+      const dt = (s.t - s.pt) / 1000;
+      const usable = dt > 0.001 && dt < 0.12;
+      const thetaV = usable ? (-(s.x - s.px) / dt) * 0.005 : 0;
+      const phiV = usable ? ((s.y - s.py) / dt) * 0.004 : 0;
+      coast.current = [
+        releaseSpring(orbit.current.theta, thetaV, null, null, (value) => {
+          orbit.current.theta = value;
+        }),
+        releaseSpring(orbit.current.phi, phiV, 0.25, 1.45, (value) => {
+          orbit.current.phi = value;
+        }),
+      ];
     };
     const onWheel = (event: WheelEvent) => {
       if (pageScroll) return;

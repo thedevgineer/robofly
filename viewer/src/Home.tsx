@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { App } from "./App";
 import { arxivUrl, githubUrl, pumpCoinUrl, pumpMintSet } from "./links";
 import { SiteNav } from "./SiteNav";
+import { Escape, Tick } from "./figures";
 import { FlyMark } from "./WorldView";
 
 const SPECS = [
@@ -280,14 +281,9 @@ export function Home({
               <p className="cap-body">
                 Looming is eight non-overlapping body-frame bins. Each bin drives one LPLC2-like cell; those cells also drive LC4. Both drive the giant fiber. The giant fiber drives the escape pair and a PSI; the PSI drives thrust. Each LPLC2 yaws away from its side. The two rear bins are weaker, so a threat already behind leaves the heading.
               </p>
-              <ol className="cap-chain" aria-label="Escape chain">
-                <li>Loom bin</li>
-                <li>LPLC2</li>
-                <li>LC4</li>
-                <li>Giant fiber</li>
-                <li>Escape + PSI</li>
-                <li>Thrust and yaw</li>
-              </ol>
+              <figure className="cap-figure">
+                <Escape />
+              </figure>
               <p className="cap-aside">That chain uses cells already in the 256. No new neurons.</p>
             </Reveal>
           </section>
@@ -470,7 +466,7 @@ export function Home({
                 Sensors into the membranes, spikes through the synapse memory, twelve motor pairs into the body. Open the Playground for the live die and full breakdown; the figure below is the same tick drawn for the paper.
               </p>
               <figure className="chip-band-figure">
-                <img src="/paper/figures/chip.png" alt="One control tick through the 256-neuron chip" width="1200" height="320" />
+                <Tick />
                 <figcaption>Sensory current, 256 membranes, 670 weights, twelve motor pairs, then the body plant.</figcaption>
               </figure>
               <p className="chip-band-action">

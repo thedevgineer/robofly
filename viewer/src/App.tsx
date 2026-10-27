@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Dialog } from "@base-ui/react/dialog";
+import { animate, motion, useMotionValue } from "motion/react";
 import { fetchGraph } from "./api";
 import { ChipMini, ChipView } from "./ChipView";
 import { loadLive, type LiveFrame, type LiveSim } from "./live";
 import { MOTOR_NAMES, populationIds, type ChipGraph, type EditorTool, type Frame, type Layout, type Scenario, type WorldPick } from "./types";
 import { Icon } from "./icons";
+import { HowTo } from "./HowTo";
 import { WorldView, type CameraMode } from "./WorldView";
 
 const TOOLS: { id: EditorTool; label: string }[] = [
@@ -102,9 +105,13 @@ export function App({ expanded = true, overlay }: { expanded?: boolean; overlay?
   const [helpOpen, setHelpOpen] = useState(false);
   const speedRef = useRef(1);
   const actions = useRef({ togglePlay: () => {}, restart: () => {}, nextCamera: () => {}, toggleChip: () => {} });
-  const chipReturnFocus = useRef<HTMLElement | null>(null);
   const chipCloseRef = useRef<HTMLButtonElement | null>(null);
-  const chipCardRef = useRef<HTMLDivElement | null>(null);
+  const chipFrom = useRef<DOMRect | null>(null);
+  const chipClosing = useRef(false);
+  const chipMoving = useRef(false);
+  const chipX = useMotionValue(0);
+  const chipY = useMotionValue(0);
+  const chipScale = useMotionValue(1);
   speedRef.current = speed;
   const simRef = useRef<LiveSim | null>(null);
   const historyRef = useRef<LiveFrame[]>([]);
@@ -129,36 +136,70 @@ export function App({ expanded = true, overlay }: { expanded?: boolean; overlay?
     };
   }, []);
 
-  useEffect(() => {
-    if (!chipOpen) return;
-    chipReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const focusTimer = window.setTimeout(() => chipCloseRef.current?.focus(), 0);
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Tab" || !chipCardRef.current) return;
-      const nodes = chipCardRef.current.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      );
-      if (nodes.length === 0) return;
-      const first = nodes[0];
-      const last = nodes[nodes.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
+  function rememberChipOrigin() {
+    const node = document.querySelector(".chip-mini");
+    chipFrom.current = node instanceof HTMLElement ? node.getBoundingClientRect() : chipFrom.current;
+  }
+
+  function openChip() {
+    rememberChipOrigin();
+    chipClosing.current = false;
+    setChipOpen(true);
+  }
+
+  function closeChip() {
+    if (!chipOpen || chipClosing.current) return;
+    chipClosing.current = true;
+    const from = chipFrom.current;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const finish = () => {
+      chipMoving.current = false;
+      chipClosing.current = false;
+      setChipOpen(false);
     };
-    window.addEventListener("keydown", onKey);
+    if (!from || reduce) {
+      finish();
+      return;
+    }
+    const scale = Math.max(0.08, from.width / window.innerWidth);
+    const spring = { type: "spring" as const, duration: 0.5, bounce: 0 };
+    chipMoving.current = true;
+    const ax = animate(chipX, from.left, spring);
+    const ay = animate(chipY, from.top, spring);
+    const as = animate(chipScale, scale, spring);
+    void Promise.all([ax.finished, ay.finished, as.finished]).then(finish);
+    window.setTimeout(finish, 700);
+  }
+
+  useLayoutEffect(() => {
+    if (!chipOpen || chipClosing.current) return;
+    const from = chipFrom.current;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!from || reduce) {
+      chipX.set(0);
+      chipY.set(0);
+      chipScale.set(1);
+      return;
+    }
+    const scale = Math.max(0.08, from.width / window.innerWidth);
+    chipX.set(from.left);
+    chipY.set(from.top);
+    chipScale.set(scale);
+    const spring = { type: "spring" as const, duration: 0.5, bounce: 0 };
+    chipMoving.current = true;
+    const ax = animate(chipX, 0, spring);
+    const ay = animate(chipY, 0, spring);
+    const as = animate(chipScale, 1, spring);
+    void Promise.all([ax.finished, ay.finished, as.finished]).then(() => {
+      chipMoving.current = false;
+    });
     return () => {
-      window.clearTimeout(focusTimer);
-      document.body.style.overflow = previous;
-      window.removeEventListener("keydown", onKey);
-      chipReturnFocus.current?.focus();
+      if (chipClosing.current) return;
+      ax.stop();
+      ay.stop();
+      as.stop();
     };
-  }, [chipOpen]);
+  }, [chipOpen, chipScale, chipX, chipY]);
 
   useEffect(() => {
     playingRef.current = playing;
@@ -172,10 +213,7 @@ export function App({ expanded = true, overlay }: { expanded?: boolean; overlay?
     const onKey = (event: KeyboardEvent) => {
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
       const slot = ["1", "2", "3", "4", "5", "6"].indexOf(event.key);
-      if (event.key === "Escape") {
-        setChipOpen(false);
-        setHelpOpen(false);
-      }
+      if (event.key === "Escape") setHelpOpen(false);
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key === "?") {
         setHelpOpen((value) => !value);
@@ -271,6 +309,16 @@ export function App({ expanded = true, overlay }: { expanded?: boolean; overlay?
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
   }, [playing, ready]);
+
+  function respawnNow() {
+    const sim = simRef.current;
+    if (sim && downedRef.current) {
+      sim.respawn();
+      remember([sim.read()], true);
+    }
+    downedRef.current = false;
+    setCaught(false);
+  }
 
   useEffect(() => {
     if (!caught) return;
@@ -472,7 +520,10 @@ export function App({ expanded = true, overlay }: { expanded?: boolean; overlay?
     togglePlay,
     restart: () => begin("yard"),
     nextCamera,
-    toggleChip: () => setChipOpen((value) => !value),
+    toggleChip: () => {
+      if (chipOpen) closeChip();
+      else openChip();
+    },
   };
 
   useEffect(() => {
@@ -512,6 +563,7 @@ export function App({ expanded = true, overlay }: { expanded?: boolean; overlay?
             <button
               type="button"
               className={editOpen ? "instrument-btn pressed" : "instrument-btn"}
+              data-howto="build"
               disabled={!ready}
               onClick={() => {
                 setEditOpen((value) => !value);
@@ -703,15 +755,18 @@ export function App({ expanded = true, overlay }: { expanded?: boolean; overlay?
             </>
           ) : null}
           {frame && !chipOpen ? (
-            <ChipMini frame={frame} graph={graph} onOpen={() => setChipOpen(true)} corner={expanded ? "left" : "right"} />
+            <ChipMini frame={frame} graph={graph} onOpen={openChip} corner={expanded ? "left" : "right"} />
           ) : null}
           {caught ? (
             <div className="death-modal" role="dialog" aria-label="Caught">
               <div className="death-card">
                 <strong>Caught</strong>
                 <p>
-                  Respawn in <span className="death-count">{countdown}</span>
+                  Wait · <span className="death-count">{countdown}</span>
                 </p>
+                <button type="button" onClick={respawnNow}>
+                  Respawn now
+                </button>
               </div>
             </div>
           ) : null}
@@ -740,19 +795,48 @@ export function App({ expanded = true, overlay }: { expanded?: boolean; overlay?
           />
         </div>
       ) : null}
-      {frame && chipOpen ? (
-        <div
-          className="chip-modal"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Chip view"
-          onClick={() => setChipOpen(false)}
+      {frame ? (
+        <Dialog.Root
+          open={chipOpen}
+          modal
+          onOpenChange={(next) => {
+            if (next) openChip();
+            else closeChip();
+          }}
         >
-          <div ref={chipCardRef} className="chip-modal-card" onClick={(event) => event.stopPropagation()}>
+          <Dialog.Portal>
+            <Dialog.Backdrop className="chip-modal-scrim" />
+            <Dialog.Popup className="chip-popup" initialFocus={chipCloseRef}>
+              <motion.div
+                className="chip-modal-card"
+                style={{ x: chipX, y: chipY, scale: chipScale, transformOrigin: "0 0" }}
+                onPointerDown={(event) => {
+                  if (!chipMoving.current || event.button !== 0) return;
+                  if ((event.target as HTMLElement).closest("button, a, input")) return;
+                  chipMoving.current = false;
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                }}
+                onPointerMove={(event) => {
+                  if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+                  chipX.set(chipX.get() + event.movementX);
+                  chipY.set(chipY.get() + event.movementY);
+                }}
+                onPointerUp={(event) => {
+                  if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+                  const spring = { type: "spring" as const, duration: 0.5, bounce: 0 };
+                  chipMoving.current = true;
+                  const ax = animate(chipX, 0, spring);
+                  const ay = animate(chipY, 0, spring);
+                  const as = animate(chipScale, 1, spring);
+                  void Promise.all([ax.finished, ay.finished, as.finished]).then(() => {
+                    chipMoving.current = false;
+                  });
+                }}
+              >
             <ChipView
               presentation="modal"
               open
-              onClose={() => setChipOpen(false)}
+              onClose={closeChip}
               closeRef={chipCloseRef}
               frame={frame}
               previousCycles={previous?.cycles ?? 0}
@@ -769,9 +853,12 @@ export function App({ expanded = true, overlay }: { expanded?: boolean; overlay?
               graph={graph}
               graphError={graphError}
             />
-          </div>
-        </div>
+              </motion.div>
+            </Dialog.Popup>
+          </Dialog.Portal>
+        </Dialog.Root>
       ) : null}
+      {expanded && frame ? <HowTo /> : null}
     </div>
   );
 }

@@ -5,6 +5,7 @@
   --ink: #e7eef6;
   --muted: #9aa8b8;
   --amber: #f0b429;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   font-family: "Avenir Next", "Segoe UI", sans-serif;
   background: #07090c;
   color: var(--ink);
@@ -59,7 +60,11 @@ button {
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 6px 10px;
-  transition: background 160ms ease-out, border-color 160ms ease-out, color 160ms ease-out;
+  transition:
+    background 160ms var(--ease-out),
+    border-color 160ms var(--ease-out),
+    color 160ms var(--ease-out),
+    transform 160ms var(--ease-out);
 }
 
 button {
@@ -1047,7 +1052,8 @@ html:has(.paper-page) #root {
   background: #faf8f5;
 }
 
-.paper-figure img {
+.paper-figure img,
+.paper-figure svg {
   display: block;
   width: 100%;
   height: auto;
@@ -1120,10 +1126,23 @@ html:has(.paper-page) #root {
   border: 1px solid #e7e2da;
 }
 
-.chip-band-figure img {
+.chip-band-figure img,
+.chip-band-figure svg,
+.cap-figure svg {
   display: block;
   width: 100%;
   height: auto;
+}
+
+.cap-figure {
+  margin: 32px 0 0;
+}
+
+.figure-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  font-family: inherit;
 }
 
 .chip-band-figure figcaption {
@@ -1182,7 +1201,7 @@ html:has(.paper-page) #root {
   padding-top: 0;
   padding-bottom: 0;
   pointer-events: none;
-  transition: max-height 420ms ease, opacity 280ms ease, padding 420ms ease;
+  transition: opacity 200ms var(--ease-out);
 }
 
 .flight.expanded .flight-bar {
@@ -1211,7 +1230,6 @@ button.hero-action {
   height: min(52vh, 520px);
   min-height: 340px;
   background: #d5e8f6;
-  transition: height 460ms ease;
 }
 
 .flight.expanded .flight-stage {
@@ -1238,9 +1256,18 @@ button.hero-action {
   min-width: 220px;
   padding: 22px 28px 18px;
   text-align: center;
+  pointer-events: auto;
   background: #f6f4f1;
   color: #16140f;
   border: 1px solid #d9d3cb;
+}
+
+.death-card button {
+  margin-top: 14px;
+  border-radius: 0;
+  background: #16140f;
+  color: #f6f4f1;
+  border: 1px solid #16140f;
 }
 
 .death-card strong {
@@ -1524,15 +1551,21 @@ button.hero-action {
   box-shadow: inset 0 -1px 0 #f0b429;
 }
 
-.chip-modal {
+.chip-modal-scrim {
   position: fixed;
   inset: 0;
   z-index: 40;
-  display: flex;
-  align-items: stretch;
-  justify-content: stretch;
-  padding: 0;
   background: rgba(22, 20, 15, 0.5);
+}
+
+.chip-popup {
+  position: fixed;
+  inset: 0;
+  z-index: 41;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .chip-modal-card {
@@ -2220,7 +2253,7 @@ button.hero-action {
   right: 11px;
   height: 2px;
   background: #16140f;
-  transition: transform 180ms ease, top 180ms ease;
+  transition: transform 180ms var(--ease-out);
 }
 
 .nav-toggle i:first-child {
@@ -2232,13 +2265,11 @@ button.hero-action {
 }
 
 .nav-toggle[aria-expanded="true"] i:first-child {
-  top: 19px;
-  transform: rotate(45deg);
+  transform: translateY(4px) rotate(45deg);
 }
 
 .nav-toggle[aria-expanded="true"] i:last-child {
-  top: 19px;
-  transform: rotate(-45deg);
+  transform: translateY(-3px) rotate(-45deg);
 }
 
 @media (max-width: 760px) {
@@ -2715,7 +2746,7 @@ button.hero-action {
 .reveal {
   opacity: 0;
   transform: translateY(18px);
-  transition: opacity 600ms ease, transform 600ms ease;
+  transition: opacity 600ms var(--ease-out), transform 600ms var(--ease-out);
 }
 
 .reveal.in {
@@ -2732,6 +2763,20 @@ button.hero-action {
 
   .hero-eyebrow i {
     animation: none;
+  }
+
+  .flight-bar {
+    transition: opacity 200ms ease;
+  }
+
+  .nav-toggle i {
+    transition: none;
+  }
+
+  .clock-led {
+    animation: none;
+    transform: none;
+    opacity: 1;
   }
 }
 
@@ -3266,19 +3311,18 @@ button.hero-action {
   color: #4a453d;
   font-size: 15px;
   line-height: 1.55;
-  animation: desc-in 360ms ease;
+  transition: opacity 200ms var(--ease-out);
+}
+
+@starting-style {
+  .hero-desc {
+    opacity: 0;
+  }
 }
 
 .hero-desc a {
   color: #16140f;
   white-space: nowrap;
-}
-
-@keyframes desc-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
 }
 
 .hero-panel .hero-actions {
@@ -3334,9 +3378,85 @@ button.hero-action {
 
   .hero-desc {
     animation: none;
+    transition: opacity 200ms ease;
   }
 }
 
 .site-mark[hidden] {
   display: none;
+}
+
+.howto-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(22, 20, 15, 0.28);
+}
+
+.howto-popup {
+  position: fixed;
+  z-index: 41;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  pointer-events: none;
+}
+
+.howto-card {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 280px;
+  padding: 16px;
+  pointer-events: auto;
+  background: #f6f4f1;
+  color: #16140f;
+  border: 1px solid #16140f;
+  border-radius: 0;
+}
+
+.howto-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.howto-body {
+  margin: 8px 0 0;
+  color: #6d675e;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.howto-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.howto-skip,
+.howto-next {
+  border-radius: 0;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.howto-skip {
+  background: #f6f4f1;
+  color: #16140f;
+  border: 1px solid #16140f;
+}
+
+.howto-next {
+  background: #16140f;
+  color: #f6f4f1;
+  border: 1px solid #16140f;
+}
+
+[data-howto-current] {
+  box-shadow: 0 0 0 2px #f0b429;
 }
